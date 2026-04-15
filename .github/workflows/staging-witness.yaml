@@ -1,0 +1,60 @@
+name: deploy-to-dev-server
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to deploy (defaults to the branch this workflow runs on)"
+        required: false
+        default: ""
+  pull_request:
+    branches: [staging]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build-and-deploy:
+    environment: development
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          BRANCH_NAME: ${{ github.event.inputs.branch || github.head_ref || github.ref_name }}
+          APP_PATH: ${{ vars.APP_PATH }}
+        with:
+          host: ${{ vars.SSH_HOST }}
+          username: ${{ vars.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          envs: BRANCH_NAME,APP_PATH
+          script: |
+            echo "Resetting witness in folder: $APP_PATH/bifold/packages/witness-server, branch: $BRANCH_NAME..."
+            cd $APP_PATH
+            GIT_SSH_COMMAND='ssh -i ~/.ssh/id_AdvancedIdentity_deploy_ed25519' git fetch origin
+            GIT_SSH_COMMAND='ssh -i ~/.ssh/id_AdvancedIdentity_deploy_ed25519' git reset --hard origin/$BRANCH_NAME
+            git config --global url."https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/".insteadOf "https://github.com/"
+            git submodule sync --recursive
+            git submodule update --init --recursive --force
+            git config --global --unset url."https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/".insteadOf
+            cd $APP_PATH/bifold/packages/witness-server
+            echo "Restarting witness server..."
+            docker compose down
+            docker compose up -d --build
+
+            echo "Waiting for health check to pass..."
+            for i in {1..10}; do
+              if curl --fail --silent http://localhost:9003; then
+                echo "App is healthy"
+                exit 0
+              else
+                echo "Health check failed (try $i), retrying..."
+                sleep 5
+              fi
+            done
+
+            echo "App failed health check after restart"
+            docker compose logs
+            exit 1

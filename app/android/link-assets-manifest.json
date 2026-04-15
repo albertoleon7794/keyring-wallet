@@ -1,0 +1,53 @@
+{
+  "migIndex": 1,
+  "data": [
+    {
+      "path": "src/assets/fonts/GT-America-Bold.OTF",
+      "sha1": "82a09547098ac1c762481a96cdaabd8071ef35f4"
+    },
+    {
+      "path": "src/assets/fonts/GT-America-Extended-Bold.OTF",
+      "sha1": "ec7791c8e22246c1e17b10d5857690dfc0883723"
+    },
+    {
+      "path": "src/assets/fonts/GT-America-Medium.OTF",
+      "sha1": "acc5fe829633e13c10d4a4d1602eb3c7e629a406"
+    },
+    {
+      "path": "src/assets/fonts/GT-America-Mono-Bold.OTF",
+      "sha1": "33ad73ed7cd8eba8815062dc28f984228b9973c3"
+    },
+    {
+      "path": "src/assets/fonts/GT-America-Mono-Regular.OTF",
+      "sha1": "9da2815e22220def393ab2bb16f25f6c38f812df"
+    },
+    {
+      "path": "src/assets/fonts/GT-America-Regular.OTF",
+      "sha1": "58437db4c55b829d301e16d4e997198a15c68f90"
+    },
+    {
+      "path": "src/assets/fonts/MaterialIcons.ttf",
+      "sha1": "1943803d652750c8ec60415f1e57401c70e72d25"
+    },
+    {
+      "path": "src/assets/fonts/SourceSans3-Bold.ttf",
+      "sha1": "8fac53540313a824d8aedea33bb845bbec611b9f"
+    },
+    {
+      "path": "src/assets/fonts/SourceSans3-It.ttf",
+      "sha1": "99f7ece31abccf2a5a5e6bb208c6e43fe9b23e1e"
+    },
+    {
+      "path": "src/assets/fonts/SourceSans3-Light.ttf",
+      "sha1": "845fbde312afdfde9b0d133ca52aca33cfec07bf"
+    },
+    {
+      "path": "src/assets/fonts/SourceSans3-Regular.ttf",
+      "sha1": "f63b2573a8d85c28fbe8fc15d732e88b381faa4c"
+    },
+    {
+      "path": "src/assets/fonts/SourceSans3-Semibold.ttf",
+      "sha1": "14c1d7e8648d20cbabb8ab312b0ec3d89b47ea47"
+    }
+  ]
+}

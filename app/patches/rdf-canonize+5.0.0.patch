@@ -1,0 +1,77 @@
+diff --git a/node_modules/rdf-canonize/lib/MessageDigest-webcrypto.js b/node_modules/rdf-canonize/lib/MessageDigest-webcrypto.js
+index 1fea9ec..9523922 100644
+--- a/node_modules/rdf-canonize/lib/MessageDigest-webcrypto.js
++++ b/node_modules/rdf-canonize/lib/MessageDigest-webcrypto.js
+@@ -3,34 +3,24 @@
+  */
+ 'use strict';
+ 
+-const {bufferToHex, crypto} = require('./platform');
++// Use js-sha256 directly for React Native (no crypto.subtle dependency)
++const jsSha256 = require('js-sha256');
+ 
+ const algorithmMap = new Map([
+-  ['sha256', 'SHA-256'],
+-  ['SHA256', 'SHA-256'],
+-  ['SHA-256', 'SHA-256'],
+-  ['sha384', 'SHA-384'],
+-  ['SHA384', 'SHA-384'],
+-  ['SHA-384', 'SHA-384'],
+-  ['sha512', 'SHA-512'],
+-  ['SHA512', 'SHA-512'],
+-  ['SHA-512', 'SHA-512'],
++  ['sha256', 'sha256'],
++  ['SHA256', 'sha256'],
++  ['SHA-256', 'sha256'],
+ ]);
+ 
+ module.exports = class MessageDigest {
+   /**
+-   * Creates a new WebCrypto API MessageDigest.
++   * Creates a new MessageDigest using js-sha256.
+    *
+    * @param {string} algorithm - The algorithm to use.
+    */
+   constructor(algorithm) {
+-    // check if crypto.subtle is available
+-    // check is here rather than top-level to only fail if class is used
+-    if(!(crypto && crypto.subtle)) {
+-      throw new Error('crypto.subtle not found.');
+-    }
+     if(!algorithmMap.has(algorithm)) {
+-      throw new Error(`Unsupported algorithm "${algorithm}".`);
++      throw new Error(`Unsupported algorithm "${algorithm}". Only SHA-256 is supported in React Native.`);
+     }
+     this.algorithm = algorithmMap.get(algorithm);
+     this._content = '';
+@@ -41,8 +31,7 @@ module.exports = class MessageDigest {
+   }
+ 
+   async digest() {
+-    const data = new TextEncoder().encode(this._content);
+-    const buffer = await crypto.subtle.digest(this.algorithm, data);
+-    return bufferToHex(buffer);
++    // Use js-sha256 directly - no crypto.subtle needed!
++    return jsSha256.sha256(this._content);
+   }
+ };
+diff --git a/node_modules/rdf-canonize/lib/platform-browser.js b/node_modules/rdf-canonize/lib/platform-browser.js
+index e26533f..1dd38f2 100644
+--- a/node_modules/rdf-canonize/lib/platform-browser.js
++++ b/node_modules/rdf-canonize/lib/platform-browser.js
+@@ -7,8 +7,13 @@ require('setimmediate');
+ 
+ exports.setImmediate = setImmediate;
+ 
+-// WebCrypto
+-exports.crypto = globalThis.crypto;
++// WebCrypto - use getter for late binding (React Native polyfill support)
++Object.defineProperty(exports, 'crypto', {
++  get() {
++    return globalThis.crypto;
++  },
++  enumerable: true
++});
+ 
+ // precompute byte to hex table
+ const byteToHex = [];

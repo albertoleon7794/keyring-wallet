@@ -1,0 +1,70 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`ErrorTextBox Component renders correctly 1`] = `
+<View
+  style={
+    {
+      "backgroundColor": "#FDF0F1",
+      "borderColor": "#D21E30",
+      "borderRadius": 5,
+      "borderWidth": 1,
+      "paddingHorizontal": 10,
+      "paddingVertical": 20,
+    }
+  }
+>
+  <View
+    style={
+      {
+        "alignItems": "center",
+        "flexDirection": "row",
+      }
+    }
+  >
+    <View
+      style={
+        {
+          "alignSelf": "flex-start",
+          "marginRight": 10,
+        }
+      }
+    >
+      <Text
+        allowFontScaling={false}
+        selectable={false}
+        style={
+          [
+            {
+              "color": "#D21E30",
+              "fontSize": 30,
+            },
+            undefined,
+            {
+              "fontFamily": "Material Icons",
+              "fontStyle": "normal",
+              "fontWeight": "normal",
+            },
+            {},
+          ]
+        }
+      >
+        
+      </Text>
+    </View>
+    <Text
+      style={
+        {
+          "alignSelf": "center",
+          "color": "#4A0D15",
+          "flexShrink": 1,
+          "fontFamily": "SourceSans3-Regular",
+          "fontSize": 18,
+          "fontWeight": "normal",
+        }
+      }
+    >
+      Lorem ipsum sit dolar
+    </Text>
+  </View>
+</View>
+`;

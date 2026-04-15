@@ -1,0 +1,9 @@
+{
+  "search.exclude": {
+    "**/node_modules": true,
+  },
+  "[helm]": {
+    "editor.formatOnSave": false
+  },
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

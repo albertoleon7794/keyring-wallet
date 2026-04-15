@@ -1,0 +1,35 @@
+name: Export Signed iOS Archive
+description: Export a signed iOS Archive
+
+inputs:
+  export_options:
+    description: |
+      The file containing the export options to use 
+      for signing the archive.
+    required: true
+  ouput_artifact_ref:
+    description: |
+      The reference ID / name of the uploaded GitHub artifact
+      stored in GitHub by the upload action.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Sign & Export
+      shell: bash
+      run: |
+        xcodebuild \
+        -exportArchive \
+        -archivePath AriesBifold.xcarchive \
+        -exportPath export \
+        -exportOptionsPlist ./${{ inputs.export_options }} \
+        -verbose
+
+    - name: Upload signed artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.ouput_artifact_ref }}
+        path: export/KeyRing.ipa
+        if-no-files-found: warn
+        retention-days: 30

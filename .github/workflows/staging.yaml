@@ -1,0 +1,1013 @@
+name: Staging - Internal Testing Build & Deploy
+
+on:
+  push:
+    branches: [staging]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  calculate-build-number:
+    runs-on: ubuntu-22.04
+    outputs:
+      build_number: ${{ steps.calc.outputs.build_number }}
+    steps:
+      - name: Calculate build number
+        id: calc
+        run: |
+          OFFSET=5
+          MIN_BUILD_NUMBER=34
+
+          CALCULATED_BUILD=$((GITHUB_RUN_NUMBER + OFFSET))
+
+          if [ $CALCULATED_BUILD -lt $MIN_BUILD_NUMBER ]; then
+            BUILD_NUMBER=$MIN_BUILD_NUMBER
+          else
+            BUILD_NUMBER=$CALCULATED_BUILD
+          fi
+
+          echo "build_number=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "Calculated build number: $BUILD_NUMBER (run: $GITHUB_RUN_NUMBER + offset: $OFFSET, min: $MIN_BUILD_NUMBER)"
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+
+  extract-version:
+    runs-on: ubuntu-22.04
+    outputs:
+      app_version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.BIFOLD_REPO_TOKEN }}
+
+      - name: Initialize submodules with PAT
+        run: |
+          git submodule sync --recursive
+          git config submodule.bifold.url "https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/berkmancenter/bifold.git"
+          git submodule update --init --recursive --force
+
+      - name: Extract version from package.json
+        id: get_version
+        working-directory: app
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+  check-secrets:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check required secrets
+        shell: bash
+        run: |
+          required_secrets=(
+            "APPLE_APP_STORE_BUILD_CERTIFICATE_BASE64"
+            "APPLE_APP_STORE_BUILD_CERTIFICATE_PASSWD"
+            "BUILD_PROVISION_PROFILE_BASE64"
+            "APP_STORE_CONNECT_PRIVATE_KEY_95"
+            "APP_STORE_CONNECT_ISSUER_ID"
+            "APP_STORE_CONNECT_KEY_IDENTIFIER_95"
+            "PLAY_STORE_JKS_BASE64"
+            "PLAY_STORE_JKS_ALIAS"
+            "PLAY_STORE_JKS_PASSWD"
+            "GOOGLE_API_CREDENTIALS_BASE64"
+            "MEDIATOR_URL"
+          )
+
+          for secret in "${required_secrets[@]}"; do
+            if [ -z "${!secret}" ]; then
+              echo "⚠️ Warning: Secret $secret is not set"
+            else
+              echo "✅ Secret $secret is set"
+            fi
+          done
+        env:
+          APPLE_APP_STORE_BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_APP_STORE_BUILD_CERTIFICATE_BASE64 }}
+          APPLE_APP_STORE_BUILD_CERTIFICATE_PASSWD: ${{ secrets.APPLE_APP_STORE_BUILD_CERTIFICATE_PASSWD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          APP_STORE_CONNECT_PRIVATE_KEY_95: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_95 }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_IDENTIFIER_95: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER_95 }}
+          PLAY_STORE_JKS_BASE64: ${{ secrets.PLAY_STORE_JKS_BASE64 }}
+          PLAY_STORE_JKS_ALIAS: ${{ secrets.PLAY_STORE_JKS_ALIAS }}
+          PLAY_STORE_JKS_PASSWD: ${{ secrets.PLAY_STORE_JKS_PASSWD }}
+          GOOGLE_API_CREDENTIALS_BASE64: ${{ secrets.GOOGLE_API_CREDENTIALS_BASE64 }}
+          MEDIATOR_URL: ${{ secrets.MEDIATOR_URL }}
+
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.BIFOLD_REPO_TOKEN }}
+
+      - name: Initialize submodules with PAT
+        run: |
+          git submodule sync --recursive
+          git config submodule.bifold.url "https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/berkmancenter/bifold.git"
+          git submodule update --init --recursive --force
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup NodeJS
+        uses: ./.github/workflows/actions/setup-node
+
+      - name: Install dependencies
+        working-directory: ./
+        run: |
+          yarn install --immutable
+
+      - name: Run tests
+        working-directory: app
+        run: |
+          yarn test --passWithNoTests
+
+  build-android-staging:
+    needs: [calculate-build-number, extract-version, check-secrets, test]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      APP_VERSION: ${{ needs.extract-version.outputs.app_version }}
+      APP_BUILD_NUMBER: ${{ needs.calculate-build-number.outputs.build_number }}
+      ANDROID_PACKAGE_NAME: "asml.bkc.harvard.wallet"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.BIFOLD_REPO_TOKEN }}
+
+      - name: Initialize submodules with PAT
+        run: |
+          git submodule sync --recursive
+          git config submodule.bifold.url "https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/berkmancenter/bifold.git"
+          git submodule update --init --recursive --force
+
+      - name: Verify bifold submodule commit
+        run: |
+          echo "Bifold submodule status:"
+          git submodule status
+          echo ""
+          echo "Bifold commit details:"
+          cd bifold
+          git log -1 --oneline
+          git branch -a
+          cd ..
+
+      - name: Free up disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+
+          # Remove large system packages
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/share/swift
+          # Delete old Android SDK - we'll set up our own if needed
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/share/boost
+          # NOTE: Do NOT delete $AGENT_TOOLSDIRECTORY - it may contain tools needed by actions
+          # Only delete specific unused tools if the variable is set and safe
+          if [ -n "$AGENT_TOOLSDIRECTORY" ] && [ "$AGENT_TOOLSDIRECTORY" != "/opt/hostedtoolcache" ]; then
+            sudo rm -rf "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          fi
+
+          # Remove additional system packages and tools (but NOT /opt/hostedtoolcache - actions need it)
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/share/firefox
+          # NOTE: Do NOT delete /opt/hostedtoolcache - GitHub Actions actions use this!
+          # Only delete specific tools we don't need:
+          sudo rm -rf /opt/hostedtoolcache/CodeQL 2>/dev/null || true
+          sudo rm -rf /opt/microsoft 2>/dev/null || true
+          sudo rm -rf /usr/share/vcpkg 2>/dev/null || true
+
+          # Clean up package manager caches
+          sudo apt-get clean
+          sudo apt-get autoclean
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /var/cache/apt/archives
+          sudo rm -rf /var/cache/debconf
+
+          # Clean up Python caches (but NOT /opt/hostedtoolcache/Python - setup-python needs it)
+          # setup-python@v5 will install Python here, so we clean pip cache only
+          rm -rf ~/.cache/pip 2>/dev/null || true
+          find /usr -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find /usr -type f -name "*.pyc" -delete 2>/dev/null || true
+
+          # Clean up npm/node caches
+          rm -rf ~/.npm 2>/dev/null || true
+          rm -rf ~/.node-gyp 2>/dev/null || true
+          find /tmp -type d -name "npm-*" -exec rm -rf {} + 2>/dev/null || true
+
+          # Clean up runner diagnostic logs (critical - these cause "No space left" errors)
+          # NOTE: Only clean old logs, not the current workflow's temp directory
+          sudo rm -rf /home/runner/actions-runner/_diag/*.log 2>/dev/null || true
+          sudo rm -rf /home/runner/actions-runner/cached/_diag/*.log 2>/dev/null || true
+          # Do NOT delete /home/runner/actions-runner/_work/_temp/* - current workflow uses this!
+
+          # Clean up any large log files (more aggressive, but safe)
+          find /home/runner -type f -name "*.log" -size +5M -delete 2>/dev/null || true
+          find /tmp -type f -size +50M -delete 2>/dev/null || true
+          find /var/log -type f -name "*.log" -size +10M -delete 2>/dev/null || true
+
+          # Clean up large temporary files (but NOT everything - processes use /tmp)
+          find /tmp -type f -size +100M -delete 2>/dev/null || true
+          find /var/tmp -type f -size +100M -delete 2>/dev/null || true
+
+          echo "Disk space after cleanup:"
+          df -h
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup NodeJS
+        uses: ./.github/workflows/actions/setup-node
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: 17
+          cache: "gradle"
+
+      - name: Build bifold packages
+        working-directory: bifold
+        run: |
+          echo "Building bifold packages..."
+          yarn install --immutable
+          yarn build
+          echo "✅ Bifold packages built successfully"
+
+      - name: Verify react-native-attestation build
+        run: |
+          echo "🔍 Verifying react-native-attestation package..."
+
+          # Check TypeScript build output exists
+          if [ -f "bifold/packages/react-native-attestation/build/commonjs/index.js" ]; then
+            echo "✅ TypeScript build: OK (build/commonjs/index.js exists)"
+          else
+            echo "❌ TypeScript build FAILED: build/commonjs/index.js not found"
+            exit 1
+          fi
+
+          # Check native Android files exist
+          if [ -f "bifold/packages/react-native-attestation/android/src/main/java/com/attestation/AttestationModule.kt" ]; then
+            echo "✅ Android native: OK (AttestationModule.kt exists)"
+          else
+            echo "❌ Android native MISSING: AttestationModule.kt not found"
+            exit 1
+          fi
+
+          # Check native iOS files exist
+          if [ -f "bifold/packages/react-native-attestation/ios/Attestation.mm" ]; then
+            echo "✅ iOS native: OK (Attestation.mm exists)"
+          else
+            echo "❌ iOS native MISSING: Attestation.mm not found"
+            exit 1
+          fi
+
+          # Check podspec exists (needed for iOS CocoaPods)
+          if [ -f "bifold/packages/react-native-attestation/react-native-attestation.podspec" ]; then
+            echo "✅ CocoaPods spec: OK (podspec exists)"
+          else
+            echo "❌ CocoaPods spec MISSING: podspec not found"
+            exit 1
+          fi
+
+          echo ""
+          echo "🎉 react-native-attestation verification complete!"
+
+      - name: Clean up after bifold build
+        run: |
+          echo "Disk space after bifold build:"
+          df -h
+
+          # Clean up yarn cache (free up space early)
+          yarn cache clean 2>/dev/null || true
+          rm -rf ~/.yarn/cache 2>/dev/null || true
+
+          # Clean up node_modules caches in bifold
+          find bifold -type d -name ".cache" -exec rm -rf {} + 2>/dev/null || true
+          find bifold/node_modules -type d -name ".cache" -exec rm -rf {} + 2>/dev/null || true
+
+          # Clean up any large temporary files
+          find /tmp -type f -size +10M -delete 2>/dev/null || true
+          find /home/runner -type f -name "*.log" -size +5M -delete 2>/dev/null || true
+
+          # Clean up Python caches that might have been created
+          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+          echo "Disk space after cleanup:"
+          df -h
+
+      - name: Install dependencies
+        working-directory: ./
+        run: |
+          yarn install --immutable
+
+      - name: Verify bifold linking
+        run: |
+          node scripts/verify-bifold-linking.js
+
+      - name: Create environment settings
+        working-directory: app
+        env:
+          MEDIATOR_URL: ${{ secrets.MEDIATOR_URL }}
+        run: |
+          echo "MEDIATOR_URL=${MEDIATOR_URL}" >.env
+
+      - name: Create release keystore
+        working-directory: app/android/app
+        env:
+          PLAY_STORE_JKS_BASE64: ${{ secrets.PLAY_STORE_JKS_BASE64 }}
+          PLAY_STORE_JKS_ALIAS: ${{ secrets.PLAY_STORE_JKS_ALIAS }}
+          PLAY_STORE_JKS_PASSWD: ${{ secrets.PLAY_STORE_JKS_PASSWD }}
+        run: |
+          echo "${PLAY_STORE_JKS_BASE64}" | base64 -d >release.keystore
+          keytool -list -v -keystore release.keystore -alias ${PLAY_STORE_JKS_ALIAS} -storepass ${PLAY_STORE_JKS_PASSWD} | grep "SHA1"
+
+      - name: Free up disk space before Android build
+        run: |
+          echo "Disk space before Android build cleanup:"
+          df -h
+
+          # Aggressively clean up Gradle caches (can be 2-4GB)
+          rm -rf ~/.gradle/caches/* 2>/dev/null || true
+          rm -rf ~/.gradle/daemon/* 2>/dev/null || true
+          rm -rf ~/.gradle/wrapper/* 2>/dev/null || true
+          rm -rf ~/.gradle/jdks/* 2>/dev/null || true
+          rm -rf ~/.gradle/notifications 2>/dev/null || true
+          rm -rf ~/.gradle/buildOutputCleanup 2>/dev/null || true
+
+          # Clean up Android SDK components we don't need
+          rm -rf ~/.android/cache 2>/dev/null || true
+          find ~/.android -type f -name "*.tmp" -delete 2>/dev/null || true
+
+          # Clean up node_modules caches (more aggressive)
+          find . -type d -name ".cache" -exec rm -rf {} + 2>/dev/null || true
+          find . -type d -name "node_modules/.cache" -exec rm -rf {} + 2>/dev/null || true
+          find . -type d -name ".next" -exec rm -rf {} + 2>/dev/null || true
+          find . -type d -name ".turbo" -exec rm -rf {} + 2>/dev/null || true
+
+          # Clean up bifold source maps only (keep build/ and lib/ directories - Metro needs them)
+          # Some packages use build/ (remote-logs, oca, verifier) and some use lib/ (core)
+          find bifold/packages -type f -name "*.map" -delete 2>/dev/null || true
+          find bifold/packages -type f -name "*.d.ts.map" -delete 2>/dev/null || true
+
+          # Clean up large node_modules that aren't needed for Android build
+          # Keep only what's needed for Metro bundling and native builds
+          # CRITICAL: Do NOT delete android/ or ios/ directories - Gradle needs them for native modules!
+          # Remove test directories and files (not needed for runtime/bundling, but exclude native dirs)
+          find . -path "*/node_modules/*" -type d -name "__tests__" ! -path "*/android/*" ! -path "*/ios/*" -exec rm -rf {} + 2>/dev/null || true
+          find . -path "*/node_modules/*" -type d -name "test" ! -path "*/android/*" ! -path "*/ios/*" -exec rm -rf {} + 2>/dev/null || true
+          find . -path "*/node_modules/*" -type d -name "tests" ! -path "*/android/*" ! -path "*/ios/*" -exec rm -rf {} + 2>/dev/null || true
+          find . -path "*/node_modules/*" -type f -name "*.test.js" ! -path "*/android/*" ! -path "*/ios/*" -delete 2>/dev/null || true
+          find . -path "*/node_modules/*" -type f -name "*.spec.js" ! -path "*/android/*" ! -path "*/ios/*" -delete 2>/dev/null || true
+          # Remove documentation files (not needed for runtime/bundling, but preserve CMakeLists.txt and native dirs)
+          find . -path "*/node_modules/*" -type f -name "*.md" ! -path "*/android/*" ! -path "*/ios/*" -delete 2>/dev/null || true
+          find . -path "*/node_modules/*" -type f -name "*.txt" ! -name "CMakeLists.txt" ! -path "*/android/*" ! -path "*/ios/*" -delete 2>/dev/null || true
+          find . -path "*/node_modules/*" -type f -name "LICENSE*" ! -path "*/android/*" ! -path "*/ios/*" -delete 2>/dev/null || true
+          find . -path "*/node_modules/*" -type f -name "CHANGELOG*" ! -path "*/android/*" ! -path "*/ios/*" -delete 2>/dev/null || true
+          find . -path "*/node_modules/*" -type f -name "README*" ! -path "*/android/*" ! -path "*/ios/*" -delete 2>/dev/null || true
+
+          # Clean up yarn cache (if not already cleaned)
+          yarn cache clean 2>/dev/null || true
+          rm -rf ~/.yarn/cache 2>/dev/null || true
+          rm -rf ~/.yarn/berry/cache 2>/dev/null || true
+
+          # Clean up npm cache
+          npm cache clean --force 2>/dev/null || true
+          rm -rf ~/.npm 2>/dev/null || true
+
+          # Clean up Python caches
+          find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find . -type f -name "*.pyc" -delete 2>/dev/null || true
+          rm -rf ~/.cache/pip 2>/dev/null || true
+
+          # Clean up any large temporary files (more aggressive)
+          find /tmp -type f -size +10M -delete 2>/dev/null || true
+          find /home/runner -type f -name "*.log" -size +5M -delete 2>/dev/null || true
+          find /var/log -type f -name "*.log" -size +10M -delete 2>/dev/null || true
+
+          # Clean up runner diagnostic logs (CRITICAL - these grow during build)
+          # NOTE: Only clean old diagnostic logs, not current workflow temp files
+          sudo rm -rf /home/runner/actions-runner/_diag/*.log 2>/dev/null || true
+          sudo rm -rf /home/runner/actions-runner/cached/_diag/*.log 2>/dev/null || true
+          # Do NOT delete /home/runner/actions-runner/_work/_temp/* - current workflow uses this!
+
+          # Clean up old Android build artifacts (but keep current build directory structure)
+          find app/android -type f -name "*.apk" -delete 2>/dev/null || true
+          find app/android -type f -name "*.aab" -delete 2>/dev/null || true
+          find app/android/app/build -type d -name "intermediates" -exec rm -rf {} + 2>/dev/null || true
+          find app/android/app/build -type d -name "generated" -exec rm -rf {} + 2>/dev/null || true
+          find app/android/app/build -type d -name "tmp" -exec rm -rf {} + 2>/dev/null || true
+
+          # Clean up any existing build directories (will be recreated)
+          rm -rf app/android/app/build/outputs 2>/dev/null || true
+          rm -rf app/android/.gradle 2>/dev/null || true
+          rm -rf app/android/app/.cxx 2>/dev/null || true
+
+          # NOTE: We keep bifold lib/ and build/ directories here - Metro needs them for bundling!
+          # Some packages use build/ (remote-logs, oca, verifier) and some use lib/ (core)
+          # We delete them AFTER Metro bundling completes (see Android release build step)
+
+          # Clean up package manager caches (more aggressive)
+          sudo apt-get clean
+          sudo apt-get autoclean
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /var/cache/apt/archives
+          sudo rm -rf /var/cache/debconf
+
+          echo "Disk space after cleanup:"
+          df -h
+
+      - name: Setup Android SDK
+        working-directory: app/android
+        run: |
+          # Check if Android SDK already exists in common locations
+          if [ -d "/usr/local/lib/android" ] && [ -f "/usr/local/lib/android/platform-tools/adb" ]; then
+            export ANDROID_HOME=/usr/local/lib/android
+            echo "Found existing Android SDK at $ANDROID_HOME"
+            # Add cmdline-tools to PATH if it exists
+            if [ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]; then
+              export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+            fi
+          elif [ -d "$HOME/Android/Sdk" ] && [ -f "$HOME/Android/Sdk/platform-tools/adb" ]; then
+            export ANDROID_HOME=$HOME/Android/Sdk
+            echo "Found existing Android SDK at $ANDROID_HOME"
+            # Add cmdline-tools to PATH if it exists
+            if [ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]; then
+              export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+            fi
+          else
+            # Set up Android SDK in a temporary location
+            export ANDROID_HOME=$HOME/android-sdk
+            mkdir -p $ANDROID_HOME/cmdline-tools
+
+            echo "Downloading Android command line tools..."
+            wget --quiet --output-document=/tmp/commandlinetools.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+
+            echo "Extracting Android command line tools..."
+            unzip -q /tmp/commandlinetools.zip -d $ANDROID_HOME/cmdline-tools
+            mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+            rm -f /tmp/commandlinetools.zip
+
+            export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+
+            echo "Accepting Android SDK licenses..."
+            yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
+            echo "Installing Android SDK components..."
+            sdkmanager "platform-tools" "platforms;android-35" "build-tools;33.0.2" "ndk;25.1.8937393" > /dev/null 2>&1 || true
+          fi
+
+          # Set ANDROID_HOME and PATH for subsequent steps
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          # Add platform-tools and cmdline-tools to PATH
+          if [ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]; then
+            echo "PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_ENV
+          else
+            echo "PATH=$PATH:$ANDROID_HOME/platform-tools" >> $GITHUB_ENV
+          fi
+
+          # Create local.properties file for Gradle
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "✅ Android SDK configured at $ANDROID_HOME"
+          echo "Created local.properties with: sdk.dir=$ANDROID_HOME"
+
+      - name: Android release build
+        working-directory: app/android
+        env:
+          PLAY_STORE_JKS_ALIAS: ${{ secrets.PLAY_STORE_JKS_ALIAS }}
+          PLAY_STORE_JKS_PASSWD: ${{ secrets.PLAY_STORE_JKS_PASSWD }}
+          VERSION_CODE: ${{ env.APP_BUILD_NUMBER }}
+          VERSION_NAME: ${{ env.APP_VERSION }}
+          ORG_GRADLE_PROJECT_reactNativeArchitectures: arm64-v8a
+          GRADLE_OPTS: "-Xmx2048m -XX:MaxMetaspaceSize=512m"
+        run: |
+          # Bundle React Native code
+          cd ../ && npx react-native bundle --platform android --dev false --reset-cache --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle
+
+          # Clean up Metro cache after bundling (frees ~200-400MB)
+          rm -rf node_modules/.cache/metro-* 2>/dev/null || true
+          rm -rf /tmp/metro-* 2>/dev/null || true
+          rm -rf ~/.metro 2>/dev/null || true
+          rm -rf $HOME/.metro 2>/dev/null || true
+          rm -rf $HOME/.cache/metro-* 2>/dev/null || true
+
+          # Aggressively clean up bifold build artifacts AFTER Metro bundling (frees ~2-4GB)
+          # Metro bundling is complete, so we can now remove bifold lib/ directories
+          rm -rf bifold/packages/*/lib 2>/dev/null || true
+          rm -rf bifold/packages/*/build 2>/dev/null || true
+
+          # Clean up runner diagnostic logs again (they grow during bundling)
+          # NOTE: Only clean old diagnostic logs, not current workflow temp files
+          sudo rm -rf /home/runner/actions-runner/_diag/*.log 2>/dev/null || true
+          sudo rm -rf /home/runner/actions-runner/cached/_diag/*.log 2>/dev/null || true
+
+          # Check disk space before Gradle build
+          echo "Disk space before Gradle build:"
+          df -h
+
+          # Build with Gradle (limit memory to reduce disk usage)
+          cd android && ./gradlew bundleRelease assembleRelease --no-parallel --stacktrace --max-workers=1
+
+          # Aggressively clean up Gradle cache immediately after build (frees ~1-2GB)
+          rm -rf ~/.gradle/caches/transforms-* 2>/dev/null || true
+          rm -rf ~/.gradle/caches/modules-* 2>/dev/null || true
+          rm -rf ~/.gradle/caches/jars-* 2>/dev/null || true
+          rm -rf ~/.gradle/caches/*-* 2>/dev/null || true
+          rm -rf ~/.gradle/daemon/*/registry.bin.lock 2>/dev/null || true
+
+          # Clean up Android build intermediates (frees ~500MB-1GB)
+          find app/build -type d -name "intermediates" -exec rm -rf {} + 2>/dev/null || true
+          find app/build -type d -name "generated" -exec rm -rf {} + 2>/dev/null || true
+          find app/build -type d -name "tmp" -exec rm -rf {} + 2>/dev/null || true
+
+          # Clean up runner diagnostic logs one more time (critical)
+          # NOTE: Only clean old diagnostic logs, not current workflow temp files
+          sudo rm -rf /home/runner/actions-runner/_diag/*.log 2>/dev/null || true
+          sudo rm -rf /home/runner/actions-runner/cached/_diag/*.log 2>/dev/null || true
+
+          find . -type f -name '*.aab' && \
+          echo "✅ Android build completed successfully!"
+
+      - name: Verify build artifacts
+        working-directory: app/android
+        run: |
+          echo "📦 Listing all build artifacts:"
+          find app/build/outputs -type f
+          echo "---"
+          echo "✅ Build verification complete"
+
+      - name: Upload Android artifact
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.fork != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-staging-${{ env.APP_BUILD_NUMBER }}
+          path: app/android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - name: Extract commit message for release notes
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'staging')
+        id: commit-msg
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            COMMIT_MSG="${{ github.event.pull_request.title }}"
+            if [ -n "${{ github.event.pull_request.body }}" ]; then
+              COMMIT_MSG="$COMMIT_MSG - ${{ github.event.pull_request.body }}"
+            fi
+          else
+            COMMIT_MSG="${GITHUB_HEAD_COMMIT_MESSAGE:-}"
+            if [ -z "$COMMIT_MSG" ] || [ "$COMMIT_MSG" == "null" ]; then
+              COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null || echo "")
+            fi
+          fi
+
+          CLEAN_MSG=$(echo "$COMMIT_MSG" | sed -E 's/^Merge (pull request #[0-9]+|branch [^[:space:]]+ into [^[:space:]]+)[[:space:]]*//' | sed -E 's/^Merge pull request #[0-9]+ from [^[:space:]]+[[:space:]]*//')
+          CLEAN_MSG=$(echo "$CLEAN_MSG" | sed '/^[[:space:]]*$/d' | head -20 | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+          if [ -z "$CLEAN_MSG" ] || [ ${#CLEAN_MSG} -lt 5 ]; then
+            CLEAN_MSG="Release ${{ env.APP_VERSION }}-staging (Build ${{ env.APP_BUILD_NUMBER }})"
+          fi
+
+          {
+            echo "release_notes<<EOF"
+            echo "$CLEAN_MSG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Ship to Google Play Internal Testing
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'staging')
+        working-directory: app
+        env:
+          GOOGLE_API_CREDENTIALS_BASE64: ${{ secrets.GOOGLE_API_CREDENTIALS_BASE64 }}
+          GOOGLE_API_CREDENTIALS: "${{ github.workspace }}/app/api_keys.json"
+          ANDROID_BUNDLE_PATH: "${{ github.workspace }}/app/android/app/build/outputs/bundle/release/app-release.aab"
+          ANDROID_PACKAGE_NAME: ${{ env.ANDROID_PACKAGE_NAME }}
+          VERSION_CODE: ${{ env.APP_BUILD_NUMBER }}
+          VERSION_NAME: ${{ env.APP_VERSION }}-staging
+          GITHUB_RUN_NUMBER: ${{ env.APP_BUILD_NUMBER }}
+          GITHUB_COMMIT_MESSAGE: ${{ steps.commit-msg.outputs.release_notes }}
+        run: |
+          echo "${GOOGLE_API_CREDENTIALS_BASE64}" | base64 -d >${GOOGLE_API_CREDENTIALS} && \
+          cd ${{ github.workspace }}/scripts/gpublish && \
+          npm install && \
+          node index.js
+
+  build-ios-staging:
+    needs: [calculate-build-number, extract-version, check-secrets, test]
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      APP_VERSION: ${{ needs.extract-version.outputs.app_version }}
+      APP_BUILD_NUMBER: ${{ needs.calculate-build-number.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.BIFOLD_REPO_TOKEN }}
+
+      - name: Initialize submodules with PAT
+        run: |
+          git submodule sync --recursive
+          git config submodule.bifold.url "https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/berkmancenter/bifold.git"
+          git submodule update --init --recursive --force
+
+      - name: Verify bifold submodule commit
+        run: |
+          echo "Bifold submodule status:"
+          git submodule status
+          echo ""
+          echo "Bifold commit details:"
+          cd bifold
+          git log -1 --oneline
+          git branch -a
+          cd ..
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup NodeJS
+        uses: ./.github/workflows/actions/setup-node
+
+      - name: Configure ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          working-directory: ./app
+
+      - name: Switch to correct Xcode
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_16.2.app
+          sudo xcode-select -p
+
+      - name: Cache pod dependencies
+        id: pod-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/ios/Pods
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods
+          key: ${{ runner.os }}-pods-${{ hashFiles('app/ios/Podfile.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pods-
+
+      - name: Build bifold packages
+        working-directory: bifold
+        run: |
+          echo "Building bifold packages..."
+          yarn install --immutable
+          yarn build
+          echo "✅ Bifold packages built successfully"
+
+      - name: Verify react-native-attestation build
+        run: |
+          echo "🔍 Verifying react-native-attestation package..."
+
+          # Check TypeScript build output exists
+          if [ -f "bifold/packages/react-native-attestation/build/commonjs/index.js" ]; then
+            echo "✅ TypeScript build: OK (build/commonjs/index.js exists)"
+          else
+            echo "❌ TypeScript build FAILED: build/commonjs/index.js not found"
+            exit 1
+          fi
+
+          # Check native Android files exist
+          if [ -f "bifold/packages/react-native-attestation/android/src/main/java/com/attestation/AttestationModule.kt" ]; then
+            echo "✅ Android native: OK (AttestationModule.kt exists)"
+          else
+            echo "❌ Android native MISSING: AttestationModule.kt not found"
+            exit 1
+          fi
+
+          # Check native iOS files exist
+          if [ -f "bifold/packages/react-native-attestation/ios/Attestation.mm" ]; then
+            echo "✅ iOS native: OK (Attestation.mm exists)"
+          else
+            echo "❌ iOS native MISSING: Attestation.mm not found"
+            exit 1
+          fi
+
+          # Check podspec exists (needed for iOS CocoaPods)
+          if [ -f "bifold/packages/react-native-attestation/react-native-attestation.podspec" ]; then
+            echo "✅ CocoaPods spec: OK (podspec exists)"
+          else
+            echo "❌ CocoaPods spec MISSING: podspec not found"
+            exit 1
+          fi
+
+          echo ""
+          echo "🎉 react-native-attestation verification complete!"
+
+      - name: Install dependencies
+        working-directory: ./
+        run: |
+          yarn install --immutable
+
+      - name: Verify bifold linking
+        run: |
+          node scripts/verify-bifold-linking.js
+
+      - name: Create .xcode.env.local file
+        working-directory: app/ios
+        run: |
+          NODE_PATH=$(which node)
+          echo "export NODE_BINARY=$NODE_PATH" > .xcode.env.local
+          echo "Node path: $NODE_PATH"
+          echo "Created .xcode.env.local with content:"
+          cat .xcode.env.local
+
+      - name: Install iOS dependencies
+        working-directory: app
+        run: |
+          export USE_HERMES=true
+          yarn run ios:setup
+
+      - name: Bump Build No.
+        working-directory: app/ios
+        env:
+          CURRENT_PROJECT_VERSION: ${{ env.APP_BUILD_NUMBER }}
+          MARKETING_VERSION: ${{ env.APP_VERSION }}
+        run: |
+          agvtool new-version ${CURRENT_PROJECT_VERSION}
+          agvtool new-marketing-version ${MARKETING_VERSION}
+
+      - name: Create environment settings
+        working-directory: app
+        env:
+          MEDIATOR_URL: ${{ secrets.MEDIATOR_URL }}
+        run: |
+          echo "MEDIATOR_URL=${MEDIATOR_URL}" >.env
+
+      - name: Update APS environment
+        run: |
+          sed -i '' 's/development/production/g' app/ios/AriesBifold/AriesBifold.entitlements
+
+      - name: Create prod signing credentials
+        uses: ./.github/workflows/actions/create-ios-sig-creds
+        with:
+          certificate: ${{ secrets.APPLE_APP_STORE_BUILD_CERTIFICATE_BASE64 }}
+          certificate_password: ${{ secrets.APPLE_APP_STORE_BUILD_CERTIFICATE_PASSWD }}
+          app_store_connect_private_key: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_95 }}
+          provisioning_profile: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+
+      - name: Clear Metro bundler cache
+        working-directory: app
+        run: |
+          echo "Clearing Metro bundler cache..."
+          rm -rf node_modules/.cache/metro-* 2>/dev/null || true
+          rm -rf /tmp/metro-* 2>/dev/null || true
+          rm -rf $TMPDIR/metro-* 2>/dev/null || true
+          rm -rf ~/.metro 2>/dev/null || true
+          rm -rf $HOME/.metro 2>/dev/null || true
+          rm -rf $HOME/.cache/metro-* 2>/dev/null || true
+          rm -rf ~/.cache/metro-* 2>/dev/null || true
+          # Also clear React Native cache
+          rm -rf $TMPDIR/react-* 2>/dev/null || true
+          rm -rf /tmp/react-* 2>/dev/null || true
+          # Clear any Xcode derived data that might have cached bundles
+          rm -rf ios/build 2>/dev/null || true
+          echo "✅ Metro cache cleared"
+
+      - name: Archive build
+        working-directory: app/ios
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER_95 }}
+        run: |
+          xcodebuild \
+          -workspace AriesBifold.xcworkspace \
+          -scheme AriesBifold \
+          -configuration Release \
+          -xcconfig ../../release.xcconfig \
+          -derivedDataPath xbuild \
+          -archivePath ../../AriesBifold.xcarchive \
+          -allowProvisioningUpdates \
+          -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p9" \
+          -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+          -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+          -sdk iphoneos \
+          archive
+
+      - name: Export production archive
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'staging')
+        uses: ./.github/workflows/actions/export-ios-archive
+        with:
+          export_options: "export-options-keyring.plist"
+          ouput_artifact_ref: "ios-staging-artifact"
+
+      - name: Upload iOS artifact
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'staging')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-staging-${{ env.APP_BUILD_NUMBER }}
+          path: export/KeyRing.ipa
+          retention-days: 30
+
+      - name: Extract commit message for release notes
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'staging')
+        id: commit-msg-ios
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            COMMIT_MSG="${{ github.event.pull_request.title }}"
+            if [ -n "${{ github.event.pull_request.body }}" ]; then
+              COMMIT_MSG="$COMMIT_MSG - ${{ github.event.pull_request.body }}"
+            fi
+          else
+            COMMIT_MSG="${GITHUB_HEAD_COMMIT_MESSAGE:-}"
+            if [ -z "$COMMIT_MSG" ] || [ "$COMMIT_MSG" == "null" ]; then
+              COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null || echo "")
+            fi
+          fi
+
+          CLEAN_MSG=$(echo "$COMMIT_MSG" | sed -E 's/^Merge (pull request #[0-9]+|branch [^[:space:]]+ into [^[:space:]]+)[[:space:]]*//' | sed -E 's/^Merge pull request #[0-9]+ from [^[:space:]]+[[:space:]]*//')
+          CLEAN_MSG=$(echo "$CLEAN_MSG" | sed '/^[[:space:]]*$/d' | head -20 | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+          if [ -z "$CLEAN_MSG" ] || [ ${#CLEAN_MSG} -lt 5 ]; then
+            CLEAN_MSG="Release ${{ env.APP_VERSION }}-staging (Build ${{ env.APP_BUILD_NUMBER }})"
+          fi
+
+          {
+            echo "release_notes<<EOF"
+            echo "$CLEAN_MSG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Ship to TestFlight Internal Testing
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'staging')
+        uses: ./.github/workflows/actions/ship-to-itunes
+        with:
+          app_store_connect_issuer_id: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          app_store_connect_key_identifier: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER_95 }}
+          app_store_connect_private_key: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY_95 }}
+          version_code: ${{ env.APP_BUILD_NUMBER }}
+          version_name: ${{ env.APP_VERSION }}-staging
+          release_notes: ${{ steps.commit-msg-ios.outputs.release_notes }}
+          distribute_external: "false"
+          beta_groups: "KeyRing Internal Testers"
+
+  create-staging-tag:
+    needs: [calculate-build-number, build-android-staging, build-ios-staging]
+    if: github.event_name == 'push' && success()
+    runs-on: ubuntu-22.04
+    env:
+      APP_BUILD_NUMBER: ${{ needs.calculate-build-number.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Initialize submodules with PAT
+        run: |
+          git submodule sync --recursive
+          git config submodule.bifold.url "https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/berkmancenter/bifold.git"
+          git submodule update --init --recursive
+
+      - name: Extract version
+        id: get_version
+        working-directory: app
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          TAG="staging-v${{ steps.get_version.outputs.version }}-${{ env.APP_BUILD_NUMBER }}"
+          git tag -a "$TAG" -m "Staging build ${{ env.APP_BUILD_NUMBER }}"
+          git push origin "$TAG"
+
+  notify-team:
+    needs: [calculate-build-number, build-android-staging, build-ios-staging]
+    if: success() # Only notify on successful builds
+    runs-on: ubuntu-22.04
+    env:
+      APP_BUILD_NUMBER: ${{ needs.calculate-build-number.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ secrets.BIFOLD_REPO_TOKEN }}
+
+      - name: Initialize submodules with PAT
+        run: |
+          git submodule sync --recursive
+          git config submodule.bifold.url "https://${{ secrets.BIFOLD_REPO_TOKEN }}@github.com/berkmancenter/bifold.git"
+          git submodule update --init --recursive --force
+
+      - name: Extract version
+        id: get_version
+        working-directory: app
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Extract commit message for Slack
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'staging')
+        id: commit-msg-slack
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            COMMIT_MSG="${{ github.event.pull_request.title }}"
+            if [ -n "${{ github.event.pull_request.body }}" ]; then
+              COMMIT_MSG="$COMMIT_MSG - ${{ github.event.pull_request.body }}"
+            fi
+          else
+            COMMIT_MSG="${GITHUB_HEAD_COMMIT_MESSAGE:-}"
+            if [ -z "$COMMIT_MSG" ] || [ "$COMMIT_MSG" == "null" ]; then
+              COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null || echo "")
+            fi
+          fi
+
+          CLEAN_MSG=$(echo "$COMMIT_MSG" | sed -E 's/^Merge (pull request #[0-9]+|branch [^[:space:]]+ into [^[:space:]]+)[[:space:]]*//' | sed -E 's/^Merge pull request #[0-9]+ from [^[:space:]]+[[:space:]]*//')
+          CLEAN_MSG=$(echo "$CLEAN_MSG" | sed '/^[[:space:]]*$/d' | head -3 | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+          if [ -z "$CLEAN_MSG" ] || [ ${#CLEAN_MSG} -lt 5 ]; then
+            CLEAN_MSG="Staging build ${{ env.APP_BUILD_NUMBER }}"
+          fi
+
+          # Truncate to 200 chars max for Slack
+          CLEAN_MSG="${CLEAN_MSG:0:200}"
+
+          # Escape special characters for JSON
+          CLEAN_MSG=$(echo "$CLEAN_MSG" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/\t/\\t/g' | tr '\n' ' ' | sed 's/[[:cntrl:]]//g')
+
+          {
+            echo "commit_message<<EOF"
+            echo "$CLEAN_MSG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Send Slack Notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"🚀 New Staging Build Available! Version: ${{ steps.get_version.outputs.version }}-staging, Build: ${{ env.APP_BUILD_NUMBER }}\",
+              \"blocks\": [
+                {
+                  \"type\": \"header\",
+                  \"text\": {
+                    \"type\": \"plain_text\",
+                    \"text\": \"🚀 New Staging Build Available!\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"fields\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Version:*\n${{ steps.get_version.outputs.version }}-staging\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Build:*\n${{ env.APP_BUILD_NUMBER }}\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Branch:*\nstaging\"
+                    },
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"*Commit:*\n<https://github.com/${{ github.repository }}/commit/${{ github.sha }}|${{ github.sha }}>\"
+                    }
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*📝 Changes:*\n${{ steps.commit-msg-slack.outputs.commit_message }}\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*📱 Instructions:*\n• *iOS:* Check your email for TestFlight invitation\n• *Android:* Updates automatically, or update manually through Google Play Store\"
+                  }
+                },
+                {
+                  \"type\": \"context\",
+                  \"elements\": [
+                    {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"Triggered by: ${{ github.actor }}\"
+                    }
+                  ]
+                }
+              ]
+            }" \
+            "$SLACK_WEBHOOK_URL"

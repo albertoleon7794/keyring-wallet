@@ -1,0 +1,24 @@
+{
+  "extends": "../tsconfig-base.json",
+  "compilerOptions": {
+    "outDir": "./lib",
+    "declaration": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@assets/*": ["src/assets/*"],
+      "@keyring-theme/*": ["src/keyring-theme/*"],
+      "@bcsc-theme/*": ["src/bcsc-theme/*"],
+      "@components/*": ["src/components/*"],
+      "@events/*": ["src/events/*"],
+      "@hooks/*": ["src/hooks/*"],
+      "@screens/*": ["src/screens/*"],
+      "@services/*": ["src/services/*"],
+      "@types/*": ["src/types/*"],
+      "@utils/*": ["src/utils/*"],
+      "react-native-bcsc-core": ["../packages/bcsc-core/src"]
+    }
+  },
+  "exclude": ["node_modules", "metro.config.js", "babel.config.js", "jest.config.js", "jestSetup.js"]
+}

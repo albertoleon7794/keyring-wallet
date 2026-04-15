@@ -1,0 +1,40 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`LoadingIcon Component renders correctly 1`] = `
+<View
+  collapsable={false}
+  style={
+    {
+      "transform": [
+        {
+          "rotate": "0deg",
+        },
+      ],
+    }
+  }
+>
+  <Text
+    allowFontScaling={false}
+    selectable={false}
+    style={
+      [
+        {
+          "color": undefined,
+          "fontSize": 50,
+        },
+        {
+          "color": "#333",
+        },
+        {
+          "fontFamily": "Material Icons",
+          "fontStyle": "normal",
+          "fontWeight": "normal",
+        },
+        {},
+      ]
+    }
+  >
+    
+  </Text>
+</View>
+`;

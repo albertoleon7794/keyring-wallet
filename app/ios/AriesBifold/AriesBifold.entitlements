@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:wallet.asml.berkmancenter.org</string>
+		<string>applinks:wallet.asml.berkmancenter.org?mode=developer</string>
+		<string>applinks:witness.asml.berkmancenter.org</string>
+		<string>applinks:witness.asml.berkmancenter.org?mode=developer</string>
+	</array>
+	<key>com.apple.developer.devicecheck.appattest-environment</key>
+	<string>development</string>
+</dict>
+</plist>

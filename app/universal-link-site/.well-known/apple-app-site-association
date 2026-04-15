@@ -1,0 +1,16 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appIDs": ["947XHQ9DVC.asml.bkc.harvard.wallet"],
+        "components": [
+          {
+            "/": "/invite*",
+            "comment": "Wallet-to-wallet invitation links"
+          }
+        ]
+      }
+    ]
+  }
+}
