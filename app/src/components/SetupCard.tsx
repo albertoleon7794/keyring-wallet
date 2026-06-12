@@ -15,9 +15,10 @@ interface SetupCardProps {
   children: React.ReactNode
   footer: React.ReactNode
   scrollable?: boolean
+  testID?: string
 }
 
-const SetupCard: React.FC<SetupCardProps> = ({ icon, children, footer, scrollable = false }) => {
+const SetupCard: React.FC<SetupCardProps> = ({ icon, children, footer, scrollable = false, testID }) => {
   const cardContent = (
     <>
       <View style={styles.iconContainer}>
