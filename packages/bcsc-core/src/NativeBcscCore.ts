@@ -41,7 +41,6 @@ export type JWTClaims = {
   sub: string;
   iat: number;
   exp: number;
-  [key: string]: any;
 };
 
 export enum AccountSecurityMethod {
