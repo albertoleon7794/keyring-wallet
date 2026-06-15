@@ -13,6 +13,14 @@ on:
         type: boolean
         default: false
 
+# Required so the post-results job can comment on the PR via github-script.
+# Without `issues: write`, github.rest.issues.createComment 403s on Mac runner.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  actions: read
+
 jobs:
   # ── Jest unit tests (can be skipped on Appium retry) ──
   jest:
