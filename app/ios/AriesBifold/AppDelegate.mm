@@ -28,7 +28,6 @@
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
 }
 
-
 - (NSURL *)bundleURL
 {
 #if DEBUG

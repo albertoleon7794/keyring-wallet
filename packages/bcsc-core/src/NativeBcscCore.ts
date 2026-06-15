@@ -41,7 +41,11 @@ export type JWTClaims = {
   sub: string;
   iat: number;
   exp: number;
-  [key: string]: any;
+  family_name?: string;
+  given_name?: string;
+  birthdate?: string;
+  address?: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 export enum AccountSecurityMethod {
@@ -69,7 +73,7 @@ export interface Spec extends TurboModule {
   getKeyPair(label: string): Promise<KeyPair>;
   getToken(tokenType: number): Promise<NativeToken | null>;
   getAccount(): Promise<NativeAccount | null>;
-  setAccount(account: Omit<NativeAccount, 'id'>): Promise<void>;
+  setAccount(account: NativeAccount): Promise<void>;
   getRefreshTokenRequestBody(issuer: string, clientID: string, refreshToken: string): Promise<string | null>;
   signPairingCode(
     code: string,
