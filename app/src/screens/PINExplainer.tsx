@@ -24,6 +24,7 @@ const PINExplainer: React.FC<PINExplainerProps> = ({ continueCreatePIN }) => {
 
   return (
     <SetupCard
+      testID={testIdWithKey('PinIntroScreen')}
       icon={<PasswordIcon width={ICON_SIZE} height={ICON_SIZE} fill={ICON_FILL} {...strokeProps} />}
       footer={
         <Button

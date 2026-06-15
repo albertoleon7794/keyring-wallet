@@ -15,9 +15,10 @@ interface SetupCardProps {
   children: React.ReactNode
   footer: React.ReactNode
   scrollable?: boolean
+  testID?: string
 }
 
-const SetupCard: React.FC<SetupCardProps> = ({ icon, children, footer, scrollable = false }) => {
+const SetupCard: React.FC<SetupCardProps> = ({ icon, children, footer, scrollable = false, testID }) => {
   const cardContent = (
     <>
       <View style={styles.iconContainer}>
@@ -28,7 +29,7 @@ const SetupCard: React.FC<SetupCardProps> = ({ icon, children, footer, scrollabl
   )
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']}>
+    <SafeAreaView style={styles.safeArea} edges={['left', 'right', 'bottom']} testID={testID}>
       <View style={styles.cardWrapper}>
         <View style={styles.card}>
           {scrollable ? (

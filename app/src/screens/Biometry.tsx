@@ -114,6 +114,7 @@ const Biometry: React.FC = () => {
 
   return (
     <SetupCard
+      testID={testIdWithKey('BiometricScreen')}
       icon={<FingerprintIcon width={ICON_SIZE} height={ICON_SIZE} fill={ICON_FILL} {...strokeProps} />}
       footer={
         <Button
