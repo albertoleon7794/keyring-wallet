@@ -3,22 +3,85 @@ name: QA Pipeline (Mac)
 on:
   pull_request:
     types: [labeled]
-  workflow_dispatch:  # manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to test'
+        required: true
+      skip_jest:
+        description: 'Skip Jest unit tests (for Appium retry)'
+        type: boolean
+        default: false
 
 jobs:
-  qa-tests:
+  # ── Jest unit tests (can be skipped on Appium retry) ──
+  jest:
     # SECURITY: Only run on our repo's PRs, NOT from forks
     if: |
-      github.event.label.name == 'needs-qa' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event.label.name == 'needs-qa' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, macos, arm64]
-    timeout-minutes: 45
+    timeout-minutes: 20
+    
+    steps:
+      - name: Checkout PR
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_jest
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
+          submodules: true
+          fetch-depth: 0
+
+      - name: Setup Node
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_jest
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          node --version
+
+      - name: Install dependencies
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_jest
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          yarn install --immutable
+
+      - name: Jest unit tests
+        if: github.event_name != 'workflow_dispatch' || !inputs.skip_jest
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          yarn test 2>&1 | tee /tmp/qa-jest.log
+        continue-on-error: true
+
+      - name: Upload Jest results
+        if: always() && (github.event_name != 'workflow_dispatch' || !inputs.skip_jest)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jest-results
+          path: /tmp/qa-jest.log
+          retention-days: 3
+
+  # ── Appium E2E (can run independently) ──
+  appium:
+    needs: jest
+    if: |
+      always() &&
+      ((github.event.label.name == 'needs-qa' &&
+        github.event.pull_request.head.repo.full_name == github.repository) ||
+       github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, macos, arm64]
+    timeout-minutes: 30
     
     steps:
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
           submodules: true
           fetch-depth: 0
 
@@ -36,41 +99,105 @@ jobs:
           nvm use 20.19.2
           yarn install --immutable
 
-      - name: Jest unit tests
+      # ── Device readiness (prevents 80% of flakes) ──
+      - name: Check device ready
+        id: device-check
         run: |
-          export NVM_DIR="$HOME/.nvm"
-          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-          nvm use 20.19.2
-          yarn test 2>&1 | tee /tmp/qa-jest.log
-        continue-on-error: true
+          echo "=== Checking iPhone connection ==="
+          DEVICE_COUNT=$(xcrun xctrace list devices 2>&1 | grep -c "iPhone.*(00008140-00064C4621B8801C)")
+          if [ "$DEVICE_COUNT" -eq 0 ]; then
+            echo "DEVICE_READY=false" >> $GITHUB_OUTPUT
+            echo "::warning::iPhone not connected or not found. Skipping Appium."
+            exit 0
+          fi
+          
+          echo "=== Unlocking keychain ==="
+          security unlock-keychain ~/Library/Keychains/login.keychain-db 2>&1 || true
+          
+          echo "=== Checking device screen ==="
+          # Check if device is responding (not locked/crashed)
+          DEVICE_STATE=$(xcrun devicectl device info diagnostics --device 00008140-00064C4621B8801C 2>&1 | grep -i "state" || echo "unknown")
+          echo "Device state: $DEVICE_STATE"
+          
+          echo "DEVICE_READY=true" >> $GITHUB_OUTPUT
 
       - name: Appium E2E smoke test
+        if: steps.device-check.outputs.DEVICE_READY == 'true'
         run: |
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           nvm use 20.19.2
-          appium --session-override --log /tmp/appium.log &
+          
+          echo "=== Starting Appium server ==="
+          appium --session-override --log /tmp/appium-server.log &
           APP_PID=$!
           sleep 8
+          
+          # Verify Appium is up
+          curl -s http://localhost:4723/status | python3 -c "import json,sys; d=json.load(sys.stdin); print('Appium ready:', d.get('value',{}).get('ready',False))" || {
+            echo "DEVICE_READY=false" >> $GITHUB_OUTPUT
+            echo "::error::Appium server failed to start"
+            kill $APP_PID 2>/dev/null || true
+            exit 1
+          }
+          
+          echo "=== Running smoke test ==="
           python3 ~/.hermes/scripts/qa-session-test.py ios --json 2>&1 | tee /tmp/qa-appium.log
+          APPIUM_EXIT=$?
+          
           kill $APP_PID 2>/dev/null || true
+          exit $APPIUM_EXIT
         continue-on-error: true
 
-      - name: Post results as PR comment
+      - name: Device not available note
+        if: steps.device-check.outputs.DEVICE_READY != 'true'
+        run: |
+          echo "DEVICE UNAVAILABLE: iPhone not connected, locked, or keychain issue." | tee /tmp/qa-appium.log
+
+      - name: Upload Appium results
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appium-results
+          path: |
+            /tmp/qa-appium.log
+            /tmp/appium-server.log
+          retention-days: 3
+
+  # ── Post results as PR comment ──
+  post-results:
+    needs: [jest, appium]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/results
+
+      - name: Post QA results comment
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             let jestLog = '', appiumLog = '';
-            try { jestLog = fs.readFileSync('/tmp/qa-jest.log', 'utf8').slice(-3000); } catch(e) {}
-            try { appiumLog = fs.readFileSync('/tmp/qa-appium.log', 'utf8').slice(-2000); } catch(e) {}
             
-            const body = `## 🤖 QA Results\n\n### Jest\n\`\`\`\n${jestLog || 'No results'}\n\`\`\`\n\n### Appium E2E\n\`\`\`\n${appiumLog || 'No results'}\n\`\`\``;
+            try { jestLog = fs.readFileSync('/tmp/results/jest-results/qa-jest.log', 'utf8').slice(-3000); } catch(e) { jestLog = 'No Jest results'; }
+            try { appiumLog = fs.readFileSync('/tmp/results/appium-results/qa-appium.log', 'utf8').slice(-2000); } catch(e) { appiumLog = 'No Appium results'; }
+            
+            // Detect device issues
+            const deviceUnavailable = appiumLog.includes('DEVICE UNAVAILABLE');
+            const deviceWarning = deviceUnavailable ? '\n⚠️ **iPhone not available** — device may be locked, disconnected, or keychain locked.\n' : '';
+            
+            const body = `## 🤖 QA Results${deviceWarning}\n\n### Jest\n\`\`\`\n${jestLog}\n\`\`\`\n\n### Appium E2E\n\`\`\`\n${appiumLog}\n\`\`\``;
+            
+            const prNumber = ${{ github.event.pull_request.number || inputs.pr_number }};
             
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: prNumber,
               body: body
             });
