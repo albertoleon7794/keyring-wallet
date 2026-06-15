@@ -45,7 +45,6 @@ export type JWTClaims = {
   given_name?: string;
   birthdate?: string;
   address?: Record<string, unknown>;
-  [key: string]: unknown;
 };
 
 export enum AccountSecurityMethod {
