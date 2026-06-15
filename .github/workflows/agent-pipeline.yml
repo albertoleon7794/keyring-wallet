@@ -44,6 +44,16 @@ jobs:
           yarn test 2>&1 | tee /tmp/qa-jest.log
         continue-on-error: true
 
+      - name: Sync QA scripts to runner
+        # Ensures ~/.hermes/scripts/ always matches the PR being tested. The
+        # workflow used to assume a manually-deployed script which drifted
+        # (issue: t_e1e97376). Repo is the source of truth from here on.
+        run: |
+          mkdir -p ~/.hermes/scripts
+          cp scripts/qa/qa-session-test.py ~/.hermes/scripts/qa-session-test.py
+          chmod +x ~/.hermes/scripts/qa-session-test.py
+          ls -la ~/.hermes/scripts/qa-session-test.py
+
       - name: Appium E2E smoke test
         run: |
           export NVM_DIR="$HOME/.nvm"
