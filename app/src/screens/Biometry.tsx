@@ -114,6 +114,7 @@ const Biometry: React.FC = () => {
 
   return (
     <SetupCard
+      testID={testIdWithKey('BiometricScreen')}
       icon={<FingerprintIcon width={ICON_SIZE} height={ICON_SIZE} fill={ICON_FILL} {...strokeProps} />}
       footer={
         <Button
@@ -132,9 +133,7 @@ const Biometry: React.FC = () => {
         {biometryAvailable ? t('Biometry.EnabledText1') : t('Biometry.NotEnabledText1')}
       </ThemedText>
       {biometryAvailable ? (
-        <ThemedText style={{ textAlign: 'center', marginBottom: Spacing.md }}>
-          {t('Biometry.EnabledText2')}
-        </ThemedText>
+        <ThemedText style={{ textAlign: 'center', marginBottom: Spacing.md }}>{t('Biometry.EnabledText2')}</ThemedText>
       ) : (
         <ThemedText style={{ textAlign: 'center', marginBottom: Spacing.md }}>
           {t('Biometry.NotEnabledText2')}

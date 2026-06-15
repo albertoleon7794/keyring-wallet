@@ -41,6 +41,11 @@ export type JWTClaims = {
   sub: string;
   iat: number;
   exp: number;
+  family_name?: string;
+  given_name?: string;
+  birthdate?: string;
+  address?: Record<string, unknown>;
+  [key: string]: unknown;
 };
 
 export enum AccountSecurityMethod {
