@@ -20,8 +20,10 @@ permissions:
 jobs:
   qa-tests:
     if: |
-      github.event.label.name == 'needs-qa' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'needs-qa' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, macos, arm64]
     timeout-minutes: 60
 
