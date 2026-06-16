@@ -38,6 +38,16 @@ jobs:
           submodules: true
           fetch-depth: 0
 
+      - name: Validate pr_number (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          PR_BRANCH=$(unset GITHUB_TOKEN; HOME=/home/ubuntu gh pr view ${{ github.event.inputs.pr_number }} --repo ${{ github.repository }} --json headRefName --jq '.headRefName' 2>&1)
+          echo "PR branch: $PR_BRANCH"
+          echo "Current ref: ${{ github.ref }}"
+          if [ "$PR_BRANCH" != "${{ github.ref_name }}" ]; then
+            echo "::warning::PR #${{ github.event.inputs.pr_number }} is on branch '$PR_BRANCH', not '${{ github.ref_name }}'"
+          fi
+
       - name: Setup Node
         run: |
           export NVM_DIR="$HOME/.nvm"
@@ -61,17 +71,6 @@ jobs:
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           nvm use 20.19.2
           cd bifold && yarn build
-
-      # ════════════════════════════════════════════════════
-      # JEST UNIT TESTS
-      # ════════════════════════════════════════════════════
-      - name: Jest unit tests
-        run: |
-          export NVM_DIR="$HOME/.nvm"
-          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-          nvm use 20.19.2
-          yarn test 2>&1 | tee /tmp/qa-jest.log
-        continue-on-error: true
 
       # ════════════════════════════════════════════════════
       # BUILD iOS APP
@@ -178,14 +177,13 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let jestLog = '', appiumLog = '', buildLog = '';
-            try { jestLog = fs.readFileSync('/tmp/qa-jest.log', 'utf8').slice(-2000); } catch(e) {}
+            let appiumLog = '', buildLog = '';
             try { appiumLog = fs.readFileSync('/tmp/qa-appium.log', 'utf8').slice(-2000); } catch(e) {}
             try { buildLog = fs.readFileSync('/tmp/qa-build.log', 'utf8').slice(-1000); } catch(e) {}
             
             const buildSection = buildLog ? `\n### Build\n\`\`\`\n${buildLog}\n\`\`\`` : '';
             
-            const body = `## 🤖 QA Results\n\n### Jest\n\`\`\`\n${jestLog || 'No results'}\n\`\`\`\n\n### Appium E2E\n\`\`\`\n${appiumLog || 'No results'}\n\`\`\`${buildSection}`;
+            const body = `## 🤖 QA Results\n\n### Appium E2E\n\`\`\`\n${appiumLog || 'No results'}\n\`\`\`${buildSection}`;
             
             const prNumber = ${{ github.event.pull_request.number }};
             

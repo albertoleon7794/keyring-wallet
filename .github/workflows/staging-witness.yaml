@@ -7,9 +7,6 @@ on:
         description: "Branch to deploy (defaults to the branch this workflow runs on)"
         required: false
         default: ""
-  pull_request:
-    branches: [staging]
-    types: [opened, synchronize, reopened]
 
 jobs:
   build-and-deploy:
