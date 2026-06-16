@@ -1,0 +1,197 @@
+name: QA Pipeline (Mac)
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to test'
+        required: true
+
+# Required so the post-results job can comment on the PR via github-script.
+# Without `issues: write`, github.rest.issues.createComment 403s on Mac runner.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  qa-tests:
+    if: |
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'needs-qa' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macos, arm64]
+    timeout-minutes: 60
+
+    steps:
+      # ════════════════════════════════════════════════════
+      # SETUP
+      # ════════════════════════════════════════════════════
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          submodules: true
+          fetch-depth: 0
+
+      - name: Setup Node
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          node --version
+
+      - name: Install dependencies
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          yarn install --immutable
+
+      # ════════════════════════════════════════════════════
+      # BUILD BIFOLD (needed before xcodebuild)
+      # ════════════════════════════════════════════════════
+      - name: Build bifold submodule
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          cd bifold && yarn build
+
+      # ════════════════════════════════════════════════════
+      # JEST UNIT TESTS
+      # ════════════════════════════════════════════════════
+      - name: Jest unit tests
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          yarn test 2>&1 | tee /tmp/qa-jest.log
+        continue-on-error: true
+
+      # ════════════════════════════════════════════════════
+      # BUILD iOS APP
+      # ════════════════════════════════════════════════════
+      - name: Unlock keychain (required for codesign)
+        run: |
+          security unlock-keychain ~/Library/Keychains/login.keychain-db 2>&1 || echo "⚠️ Keychain unlock failed — build may fail on codesign"
+
+      - name: Build iOS app (xcodebuild)
+        id: build
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          
+          cd app/ios
+          
+          # Pod install first
+          pod install 2>&1 | tail -5
+          
+          # Build for real device
+          xcodebuild \
+            -workspace AriesBifold.xcworkspace \
+            -scheme AriesBifold \
+            -sdk iphoneos \
+            -destination "id=00008140-00064C4621B8801C" \
+            -configuration Debug \
+            build 2>&1 | tee /tmp/qa-build.log
+          
+          BUILD_EXIT=${PIPESTATUS[0]}
+          
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "BUILD_SUCCESS=false" >> $GITHUB_OUTPUT
+            echo "::warning::xcodebuild failed — see /tmp/qa-build.log"
+          else
+            echo "BUILD_SUCCESS=true" >> $GITHUB_OUTPUT
+            # Find and save the built .app path
+            APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path "*/Debug-iphoneos/AriesBifold.app" -type d 2>/dev/null | head -1)
+            echo "APP_PATH=$APP_PATH" >> $GITHUB_OUTPUT
+            echo "Built: $APP_PATH"
+          fi
+
+      # ════════════════════════════════════════════════════
+      # DEPLOY TO DEVICE (uninstall → install)
+      # ════════════════════════════════════════════════════
+      - name: Uninstall old app
+        if: steps.build.outputs.BUILD_SUCCESS == 'true'
+        run: |
+          echo "=== Uninstalling old KeyRing app ==="
+          xcrun devicectl device uninstall app \
+            --device 00008140-00064C4621B8801C \
+            asml.bkc.harvard.wallet 2>&1 || echo "(not installed or already removed)"
+
+      - name: Install new build
+        if: steps.build.outputs.BUILD_SUCCESS == 'true'
+        run: |
+          APP_PATH="${{ steps.build.outputs.APP_PATH }}"
+          echo "=== Installing: $APP_PATH ==="
+          xcrun devicectl device install app \
+            --device 00008140-00064C4621B8801C \
+            "$APP_PATH" 2>&1
+
+      # ════════════════════════════════════════════════════
+      # APPIUM E2E SMOKE TEST
+      # ════════════════════════════════════════════════════
+      - name: Sync QA scripts to runner
+        run: |
+          mkdir -p ~/.hermes/scripts
+          cp scripts/qa/qa-session-test.py ~/.hermes/scripts/qa-session-test.py
+          chmod +x ~/.hermes/scripts/qa-session-test.py
+
+      - name: Appium E2E smoke test
+        if: steps.build.outputs.BUILD_SUCCESS == 'true'
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          
+          echo "=== Starting Appium ==="
+          appium --session-override --log /tmp/appium-server.log &
+          APP_PID=$!
+          sleep 8
+          
+          echo "=== Running smoke test ==="
+          python3 ~/.hermes/scripts/qa-session-test.py ios --json 2>&1 | tee /tmp/qa-appium.log
+          APPIUM_EXIT=${PIPESTATUS[0]}
+          
+          kill $APP_PID 2>/dev/null || true
+          exit $APPIUM_EXIT
+        continue-on-error: true
+
+      - name: Build failed note
+        if: steps.build.outputs.BUILD_SUCCESS != 'true'
+        run: |
+          echo "BUILD FAILED — see build log" | tee /tmp/qa-appium.log
+          tail -50 /tmp/qa-build.log | tee -a /tmp/qa-appium.log
+
+      # ════════════════════════════════════════════════════
+      # POST RESULTS
+      # ════════════════════════════════════════════════════
+      - name: Post results as PR comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let jestLog = '', appiumLog = '', buildLog = '';
+            try { jestLog = fs.readFileSync('/tmp/qa-jest.log', 'utf8').slice(-2000); } catch(e) {}
+            try { appiumLog = fs.readFileSync('/tmp/qa-appium.log', 'utf8').slice(-2000); } catch(e) {}
+            try { buildLog = fs.readFileSync('/tmp/qa-build.log', 'utf8').slice(-1000); } catch(e) {}
+            
+            const buildSection = buildLog ? `\n### Build\n\`\`\`\n${buildLog}\n\`\`\`` : '';
+            
+            const body = `## 🤖 QA Results\n\n### Jest\n\`\`\`\n${jestLog || 'No results'}\n\`\`\`\n\n### Appium E2E\n\`\`\`\n${appiumLog || 'No results'}\n\`\`\`${buildSection}`;
+            
+            const prNumber = ${{ github.event.pull_request.number }};
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: body
+            });

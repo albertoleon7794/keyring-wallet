@@ -50,7 +50,7 @@ setup_permissions([
 #   dependencies: {
 #     ...(process.env.NO_FLIPPER ? { 'react-native-flipper': { platforms: { ios: null } } } : {}),
 # ```
-flipper_config = FlipperConfiguration.disabled
+# flipper removed in RN 0.74
 
 linkage = ENV['USE_FRAMEWORKS']
 if linkage != nil
@@ -74,7 +74,9 @@ target 'AriesBifold' do
   use_react_native!(
     :path => config[:reactNativePath],
     # An absolute path to your application root.
-    :app_path => "#{Pod::Config.instance.installation_root}/.."
+    :app_path => "#{Pod::Config.instance.installation_root}/..",
+    # Enable New Architecture (Fabric + TurboModules) — default-on in RN 0.76+
+    :new_arch_enabled => true
   )
 
   target 'AriesBifoldTests' do
