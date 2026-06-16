@@ -1,4 +1,4 @@
-name: QA Pipeline (Mac)
+name: QA Pipeline (Android + iOS)
 
 on:
   pull_request:
@@ -9,28 +9,27 @@ on:
         description: 'PR number to test'
         required: true
 
-# Required so the post-results job can comment on the PR via github-script.
-# Without `issues: write`, github.rest.issues.createComment 403s on Mac runner.
+# Required so the post-results jobs can comment on the PR via github-script.
 permissions:
   contents: read
   issues: write
   pull-requests: write
   actions: read
 
+# ════════════════════════════════════════════════════
+# ANDROID BUILD — runs on EC2 self-hosted runner
+# ════════════════════════════════════════════════════
 jobs:
-  qa-tests:
+  android-build:
     if: |
       (github.event_name == 'pull_request' &&
        github.event.label.name == 'needs-qa' &&
        github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, macos, arm64]
-    timeout-minutes: 60
+    runs-on: [self-hosted, android]
+    timeout-minutes: 30
 
     steps:
-      # ════════════════════════════════════════════════════
-      # SETUP
-      # ════════════════════════════════════════════════════
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
@@ -62,9 +61,138 @@ jobs:
           nvm use 20.19.2
           yarn install --immutable
 
-      # ════════════════════════════════════════════════════
-      # BUILD BIFOLD (needed before xcodebuild)
-      # ════════════════════════════════════════════════════
+      - name: Build bifold submodule
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          cd bifold && yarn install --immutable && yarn build
+
+      - name: Setup Android SDK
+        run: |
+          export ANDROID_HOME=/opt/android-sdk
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          # Verify SDK components exist
+          echo "SDK platforms: $(ls $ANDROID_HOME/platforms/)"
+          echo "Build tools: $(ls $ANDROID_HOME/build-tools/)"
+          echo "NDK: $(ls $ANDROID_HOME/ndk/)"
+          # Create local.properties
+          cd app/android
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          echo "✅ Android SDK configured"
+
+      - name: Android assembleDebug
+        id: build
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          export ANDROID_HOME=/opt/android-sdk
+          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+          cd app/android
+          
+          # Clean up from prior builds to save disk
+          rm -rf app/build .gradle app/.cxx ~/.gradle/caches/transforms-* 2>/dev/null || true
+          
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/android-build.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "BUILD_SUCCESS=false" >> $GITHUB_OUTPUT
+            echo "::warning::Android assembleDebug failed — see log"
+          else
+            echo "BUILD_SUCCESS=true" >> $GITHUB_OUTPUT
+            APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+            if [ -f "$APK_PATH" ]; then
+              APK_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || echo "unknown")
+              echo "APK_SIZE=$APK_SIZE" >> $GITHUB_OUTPUT
+              echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
+              echo "✅ APK built: $APK_PATH ($APK_SIZE bytes)"
+            fi
+          fi
+          
+          # Clean Gradle caches after build to keep disk usage manageable
+          rm -rf ~/.gradle/caches/transforms-* 2>/dev/null || true
+
+      - name: Post Android results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let buildLog = '';
+            try { buildLog = fs.readFileSync('/tmp/android-build.log', 'utf8').slice(-4000); } catch(e) {}
+
+            const status = '${{ steps.build.outputs.BUILD_SUCCESS }}';
+            const apkSize = '${{ steps.build.outputs.APK_SIZE }}';
+            const statusEmoji = status === 'true' ? '✅' : '❌';
+            const sizeInfo = apkSize ? `\n- APK size: ${(apkSize / 1024 / 1024).toFixed(1)} MB` : '';
+
+            const body = `## 🤖 Android Build ${statusEmoji}
+            ${sizeInfo}
+            <details><summary>Build log (last 4000 chars)</summary>
+
+            \`\`\`
+            ${buildLog || 'No output captured'}
+            \`\`\`
+            </details>`;
+
+            const prNumber = ${{ github.event.pull_request.number }};
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: body
+            });
+
+  # ════════════════════════════════════════════════════
+  # iOS BUILD + QA — runs on Mac self-hosted runner
+  # ════════════════════════════════════════════════════
+  ios-qa:
+    if: |
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'needs-qa' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macos, arm64]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          submodules: true
+          fetch-depth: 0
+
+      - name: Validate pr_number (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          PR_BRANCH=$(unset GITHUB_TOKEN; HOME=/home/ubuntu gh pr view ${{ github.event.inputs.pr_number }} --repo ${{ github.repository }} --json headRefName --jq '.headRefName' 2>&1)
+          echo "PR branch: $PR_BRANCH"
+          echo "Current ref: ${{ github.ref }}"
+          if [ "$PR_BRANCH" != "${{ github.ref_name }}" ]; then
+            echo "::warning::PR #${{ github.event.inputs.pr_number }} is on branch '$PR_BRANCH', not '${{ github.ref_name }}'"
+          fi
+
+      - name: Setup Node
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          node --version
+
+      - name: Install dependencies
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          yarn install --immutable
+
       - name: Build bifold submodule
         run: |
           export NVM_DIR="$HOME/.nvm"
@@ -72,9 +200,6 @@ jobs:
           nvm use 20.19.2
           cd bifold && yarn build
 
-      # ════════════════════════════════════════════════════
-      # BUILD iOS APP
-      # ════════════════════════════════════════════════════
       - name: Unlock keychain (required for codesign)
         run: |
           security unlock-keychain ~/Library/Keychains/login.keychain-db 2>&1 || echo "⚠️ Keychain unlock failed — build may fail on codesign"
@@ -85,13 +210,11 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           nvm use 20.19.2
-          
+
           cd app/ios
-          
-          # Pod install first
+
           pod install 2>&1 | tail -5
-          
-          # Build for real device
+
           xcodebuild \
             -workspace AriesBifold.xcworkspace \
             -scheme AriesBifold \
@@ -99,23 +222,19 @@ jobs:
             -destination "id=00008140-00064C4621B8801C" \
             -configuration Debug \
             build 2>&1 | tee /tmp/qa-build.log
-          
+
           BUILD_EXIT=${PIPESTATUS[0]}
-          
+
           if [ $BUILD_EXIT -ne 0 ]; then
             echo "BUILD_SUCCESS=false" >> $GITHUB_OUTPUT
             echo "::warning::xcodebuild failed — see /tmp/qa-build.log"
           else
             echo "BUILD_SUCCESS=true" >> $GITHUB_OUTPUT
-            # Find and save the built .app path
             APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -path "*/Debug-iphoneos/AriesBifold.app" -type d 2>/dev/null | head -1)
             echo "APP_PATH=$APP_PATH" >> $GITHUB_OUTPUT
             echo "Built: $APP_PATH"
           fi
 
-      # ════════════════════════════════════════════════════
-      # DEPLOY TO DEVICE (uninstall → install)
-      # ════════════════════════════════════════════════════
       - name: Uninstall old app
         if: steps.build.outputs.BUILD_SUCCESS == 'true'
         run: |
@@ -133,9 +252,6 @@ jobs:
             --device 00008140-00064C4621B8801C \
             "$APP_PATH" 2>&1
 
-      # ════════════════════════════════════════════════════
-      # APPIUM E2E SMOKE TEST
-      # ════════════════════════════════════════════════════
       - name: Sync QA scripts to runner
         run: |
           mkdir -p ~/.hermes/scripts
@@ -148,16 +264,16 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           nvm use 20.19.2
-          
+
           echo "=== Starting Appium ==="
           appium --session-override --log /tmp/appium-server.log &
           APP_PID=$!
           sleep 8
-          
+
           echo "=== Running smoke test ==="
           python3 ~/.hermes/scripts/qa-session-test.py ios --json 2>&1 | tee /tmp/qa-appium.log
           APPIUM_EXIT=${PIPESTATUS[0]}
-          
+
           kill $APP_PID 2>/dev/null || true
           exit $APPIUM_EXIT
         continue-on-error: true
@@ -168,25 +284,22 @@ jobs:
           echo "BUILD FAILED — see build log" | tee /tmp/qa-appium.log
           tail -50 /tmp/qa-build.log | tee -a /tmp/qa-appium.log
 
-      # ════════════════════════════════════════════════════
-      # POST RESULTS
-      # ════════════════════════════════════════════════════
-      - name: Post results as PR comment
+      - name: Post iOS results
         if: always()
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             let appiumLog = '', buildLog = '';
-            try { appiumLog = fs.readFileSync('/tmp/qa-appium.log', 'utf8').slice(-2000); } catch(e) {}
-            try { buildLog = fs.readFileSync('/tmp/qa-build.log', 'utf8').slice(-1000); } catch(e) {}
-            
-            const buildSection = buildLog ? `\n### Build\n\`\`\`\n${buildLog}\n\`\`\`` : '';
-            
-            const body = `## 🤖 QA Results\n\n### Appium E2E\n\`\`\`\n${appiumLog || 'No results'}\n\`\`\`${buildSection}`;
-            
+            try { appiumLog = fs.readFileSync('/tmp/qa-appium.log', 'utf8').slice(-4000); } catch(e) {}
+            try { buildLog = fs.readFileSync('/tmp/qa-build.log', 'utf8').slice(-2000); } catch(e) {}
+
+            const buildSection = buildLog ? `\n<details><summary>Build log</summary>\n\n\`\`\`\n${buildLog}\n\`\`\`\n</details>` : '';
+
+            const body = `## 🤖 iOS QA Results\n\n### Appium E2E\n\`\`\`\n${appiumLog || 'No results'}\n\`\`\`${buildSection}`;
+
             const prNumber = ${{ github.event.pull_request.number }};
-            
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,

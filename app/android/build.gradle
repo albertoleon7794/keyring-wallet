@@ -2,12 +2,12 @@
 
 buildscript {
     ext {
-        buildToolsVersion = "33.0.2"
+        buildToolsVersion = "35.0.0"
         minSdkVersion = 24
         compileSdkVersion = 35
         targetSdkVersion = 35
-        ndkVersion = "25.1.8937393"
-        kotlinVersion = "1.9.20"
+        ndkVersion = "27.1.12297006"
+        kotlinVersion = "2.0.21"
         androidXBrowser = "1.5.0"
         javaVersion = JavaVersion.VERSION_17
     }
@@ -16,15 +16,16 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle:8.6.1")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20")
+        classpath("com.android.tools.build:gradle")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
         classpath('com.google.gms:google-services:4.4.2')
         classpath("com.facebook.react:react-native-gradle-plugin")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
         // NOTE: Do not place your application dependencies here; they belong
         // in the individual module build.gradle files
     }
 }
+
+apply plugin: "com.facebook.react.rootproject"
 
 allprojects {
     repositories {
@@ -45,9 +46,11 @@ allprojects {
     
     configurations.all {
         resolutionStrategy {
-            force "org.jetbrains.kotlin:kotlin-stdlib:1.9.20"
-            force "org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.20"
-            force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.20"
+            force "org.jetbrains.kotlin:kotlin-stdlib:2.0.21"
+            force "org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21"
+            force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21"
+            force "com.facebook.react:react-android:0.77.1"
+            force "com.facebook.react:hermes-android:0.77.1"
         }
     }
 }
