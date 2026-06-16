@@ -169,6 +169,68 @@ HOME=/home/ubuntu gh pr comment <NUMBER> \
 | `smoke-runner.js` | Mac: `~/.hermes/smoke-runner.js` | WebDriverIO + Appium test |
 | `smoke-runner-v2.js` | EC2: `/tmp/smoke-runner-v2.js` | Source copy of runner |
 | QA profile config | `~/.hermes/profiles/qa/` | QA agent settings |
+| `keyring-preflight-checklist.md` | `~/.hermes/` | Daily pre-flight checks |
+| `react-native-testid-pattern.md` | `~/.hermes/skills/.../appium-real-device-testing/references/` | How to add testIDs |
+
+## Pre-Flight Checklist (Daily)
+
+Before running any tests:
+
+1. **Plug in iPhone** via USB (or ensure wireless tunnel is up)
+2. **Unlock iPhone** — home screen visible (WDA can't tap passcode)
+3. **Start tunnel** (in Mac GUI Terminal, NOT SSH):
+   ```
+   sudo appium driver run xcuitest tunnel-creation
+   ```
+4. **Verify Appium**: `curl http://localhost:4723/status`
+5. **Build** (if code changed): Cmd+B in Xcode
+
+## Port Map
+
+| Port | Service | Context |
+|------|---------|---------|
+| 4723 | Appium HTTP server | User LaunchAgent |
+| 42314 | Tunnel registry | Root, manual start |
+| 50000 | Packet stream | Root, manual start |
+
+## Pipeline Automation (Kanban Labels)
+
+| Label | Who sets | Meaning |
+|-------|----------|---------|
+| `speced` | Alberto | PM approved, ready for engineer |
+| `in-progress` | Engineer (auto) | Working on it |
+| `in-review` | Engineer (auto) | PR open, ready for QA |
+| `done` | QA (auto) | QA passed |
+| `needs-work` | QA (auto) | QA failed, needs fixes |
+
+## TestID Pattern (for Appium accessibility)
+
+When adding testIDs for Appium automation, use the **zero-size sibling View alias** pattern:
+
+```tsx
+{/* Accessibility alias for QA automation */}
+<View
+  testID={testIdWithKey('PinField1')}
+  accessible={true}
+  accessibilityLabel={t('PINCreate.EnterPIN')}
+  style={{ width: 0, height: 0 }}
+/>
+<PINInput
+  testID={testIdWithKey('EnterPIN')}   // unchanged — Jest tests still pass
+  ...
+/>
+```
+
+**Rules:**
+- If element has **no testID**: add directly
+- If element **already has matching testID**: leave alone
+- If element has testID that **disagrees with spec** AND tests reference it: add sibling View alias
+- If component returns fragment `<>...</>`: wrap in `<View style={{flex:1}} testID={...}>`
+- System keyboard keys and native OS modals **cannot** have testIDs
+
+Full reference: `~/.hermes/skills/software-development/appium-real-device-testing/references/react-native-testid-pattern.md`
+
+The testID branch is `feat/add-testids-issue-21` (3 commits: root view testIDs on onboarding screens + SetupCard prop fix).
 
 ## Environment Variables
 
