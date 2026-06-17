@@ -34,7 +34,7 @@ jobs:
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', inputs.pr_number) }}
           submodules: true
           fetch-depth: 0
 
@@ -257,7 +257,7 @@ jobs:
             
             const body = `## 🤖 QA Results\n\n### Jest\n\`\`\`\n${jestLog || 'No results'}\n\`\`\`\n\n### Appium E2E — iOS\n\`\`\`\n${appiumIosLog || 'No results'}\n\`\`\`\n\n### Appium E2E — Android\n\`\`\`\n${appiumAndroidLog || 'No results'}\n\`\`\`${buildSection}`;
             
-            const prNumber = ${{ github.event.pull_request.number }};
+            const prNumber = ${{ github.event.pull_request.number || inputs.pr_number }};
             
             await github.rest.issues.createComment({
               owner: context.repo.owner,
