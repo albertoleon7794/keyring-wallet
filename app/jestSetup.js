@@ -26,3 +26,14 @@ jest.mock('@bifold/react-native-attestation', () => ({}))
 jest.mock('@hyperledger/anoncreds-react-native', () => ({}))
 jest.mock('@hyperledger/aries-askar-react-native', () => ({}))
 jest.mock('@hyperledger/indy-vdr-react-native', () => ({}))
+// RN 0.81 ships a development renderer that accesses React.__CLIENT_INTERNALS
+// react-native-gesture-handler loads this at import time via RNRenderer.js
+// In test environment, mock both the shim and the gesture-handler's RNRenderer
+jest.mock('react-native/Libraries/Renderer/shims/ReactNative', () => ({
+  __esModule: true,
+  default: {},
+}))
+jest.mock('react-native-gesture-handler/lib/commonjs/RNRenderer', () => ({
+  __esModule: true,
+  RNRenderer: {},
+}))
