@@ -135,7 +135,7 @@ jobs:
             "$APP_PATH" 2>&1
 
       # ════════════════════════════════════════════════════
-      # APPIUM E2E SMOKE TEST
+      # iOS APPIUM E2E SMOKE TEST
       # ════════════════════════════════════════════════════
       - name: Sync QA scripts to runner
         run: |
@@ -143,7 +143,7 @@ jobs:
           cp scripts/qa/qa-session-test.py ~/.hermes/scripts/qa-session-test.py
           chmod +x ~/.hermes/scripts/qa-session-test.py
 
-      - name: Appium E2E smoke test
+      - name: Appium E2E — iOS
         if: steps.build.outputs.BUILD_SUCCESS == 'true'
         run: |
           export NVM_DIR="$HOME/.nvm"
@@ -155,19 +155,86 @@ jobs:
           APP_PID=$!
           sleep 8
           
-          echo "=== Running smoke test ==="
-          python3 ~/.hermes/scripts/qa-session-test.py ios --json 2>&1 | tee /tmp/qa-appium.log
+          echo "=== Running iOS smoke test ==="
+          python3 ~/.hermes/scripts/qa-session-test.py ios --json 2>&1 | tee /tmp/qa-appium-ios.log
           APPIUM_EXIT=${PIPESTATUS[0]}
           
           kill $APP_PID 2>/dev/null || true
           exit $APPIUM_EXIT
         continue-on-error: true
 
-      - name: Build failed note
+      - name: iOS build failed note
         if: steps.build.outputs.BUILD_SUCCESS != 'true'
         run: |
-          echo "BUILD FAILED — see build log" | tee /tmp/qa-appium.log
-          tail -50 /tmp/qa-build.log | tee -a /tmp/qa-appium.log
+          echo "iOS BUILD FAILED — see build log" | tee /tmp/qa-appium-ios.log
+          tail -50 /tmp/qa-build.log | tee -a /tmp/qa-appium-ios.log
+
+      # ════════════════════════════════════════════════════
+      # ANDROID BUILD + APPIUM
+      # ════════════════════════════════════════════════════
+      - name: Setup Android SDK
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo '')" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_HOME"
+
+      - name: Build Android app (assembleDebug)
+        id: android-build
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          
+          cd app/android
+          ./gradlew assembleDebug 2>&1 | tee /tmp/qa-build-android.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          
+          if [ $BUILD_EXIT -ne 0 ]; then
+            echo "ANDROID_BUILD_SUCCESS=false" >> $GITHUB_OUTPUT
+            echo "::warning::gradle assembleDebug failed — see /tmp/qa-build-android.log"
+          else
+            echo "ANDROID_BUILD_SUCCESS=true" >> $GITHUB_OUTPUT
+            APK_PATH=$(find app/build/outputs/apk -name "*.apk" 2>/dev/null | head -1)
+            echo "APK_PATH=$APK_PATH" >> $GITHUB_OUTPUT
+            echo "Built: $APK_PATH"
+          fi
+        continue-on-error: true
+
+      - name: Install Android APK to device
+        if: steps.android-build.outputs.ANDROID_BUILD_SUCCESS == 'true'
+        run: |
+          APK_PATH="${{ steps.android-build.outputs.APK_PATH }}"
+          echo "=== Installing APK: $APK_PATH ==="
+          adb -s R9TT803DGWK install -r "$APK_PATH" 2>&1 || echo "⚠️ adb install failed (device may be disconnected)"
+
+      - name: Appium E2E — Android
+        id: android-appium
+        if: steps.android-build.outputs.ANDROID_BUILD_SUCCESS == 'true'
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+          nvm use 20.19.2
+          
+          echo "=== Starting Appium for Android ==="
+          appium --session-override --log /tmp/appium-server-android.log &
+          APP_PID=$!
+          sleep 8
+          
+          echo "=== Running Android smoke test ==="
+          python3 ~/.hermes/scripts/qa-session-test.py android --json 2>&1 | tee /tmp/qa-appium-android.log
+          APPIUM_EXIT=${PIPESTATUS[0]}
+          
+          kill $APP_PID 2>/dev/null || true
+          exit $APPIUM_EXIT
+        continue-on-error: true
+
+      - name: Android build failed note
+        if: steps.android-build.outputs.ANDROID_BUILD_SUCCESS != 'true'
+        run: |
+          echo "ANDROID BUILD FAILED — see build log" | tee /tmp/qa-appium-android.log
+          tail -50 /tmp/qa-build-android.log | tee -a /tmp/qa-appium-android.log
 
       # ════════════════════════════════════════════════════
       # POST RESULTS
@@ -178,14 +245,17 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let jestLog = '', appiumLog = '', buildLog = '';
+            let jestLog = '', appiumIosLog = '', appiumAndroidLog = '', buildIosLog = '', buildAndroidLog = '';
             try { jestLog = fs.readFileSync('/tmp/qa-jest.log', 'utf8').slice(-2000); } catch(e) {}
-            try { appiumLog = fs.readFileSync('/tmp/qa-appium.log', 'utf8').slice(-2000); } catch(e) {}
-            try { buildLog = fs.readFileSync('/tmp/qa-build.log', 'utf8').slice(-1000); } catch(e) {}
+            try { appiumIosLog = fs.readFileSync('/tmp/qa-appium-ios.log', 'utf8').slice(-1500); } catch(e) {}
+            try { appiumAndroidLog = fs.readFileSync('/tmp/qa-appium-android.log', 'utf8').slice(-1500); } catch(e) {}
+            try { buildIosLog = fs.readFileSync('/tmp/qa-build.log', 'utf8').slice(-800); } catch(e) {}
+            try { buildAndroidLog = fs.readFileSync('/tmp/qa-build-android.log', 'utf8').slice(-800); } catch(e) {}
             
-            const buildSection = buildLog ? `\n### Build\n\`\`\`\n${buildLog}\n\`\`\`` : '';
+            const buildSection = (buildIosLog || buildAndroidLog)
+              ? `\n### iOS Build\n\`\`\`\n${buildIosLog || 'N/A'}\n\`\`\`\n### Android Build\n\`\`\`\n${buildAndroidLog || 'N/A'}\n\`\`\`` : '';
             
-            const body = `## 🤖 QA Results\n\n### Jest\n\`\`\`\n${jestLog || 'No results'}\n\`\`\`\n\n### Appium E2E\n\`\`\`\n${appiumLog || 'No results'}\n\`\`\`${buildSection}`;
+            const body = `## 🤖 QA Results\n\n### Jest\n\`\`\`\n${jestLog || 'No results'}\n\`\`\`\n\n### Appium E2E — iOS\n\`\`\`\n${appiumIosLog || 'No results'}\n\`\`\`\n\n### Appium E2E — Android\n\`\`\`\n${appiumAndroidLog || 'No results'}\n\`\`\`${buildSection}`;
             
             const prNumber = ${{ github.event.pull_request.number }};
             
