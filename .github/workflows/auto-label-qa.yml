@@ -1,0 +1,46 @@
+name: Auto-label QA
+
+# When engineer opens a PR linked to a needs-qa issue, 
+# automatically add the needs-qa label to the PR to trigger the Mac QA pipeline.
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  auto-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check linked issues for needs-qa
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Extract issue references from PR body (Closes #N, Fixes #N, Resolves #N, Refs #N)
+          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --json body --jq '.body')
+          
+          # Find issue numbers using regex
+          ISSUE_NUMS=$(echo "$PR_BODY" | grep -oP '(?:Closes|Fixes|Resolves|Refs|Close|Fix|Resolve|Ref)\s+#\d+' | grep -oP '#\d+' | sed 's/#//' | sort -u)
+          
+          if [ -z "$ISSUE_NUMS" ]; then
+            echo "No linked issues found in PR body"
+            exit 0
+          fi
+          
+          echo "Found issue references: $ISSUE_NUMS"
+          
+          for ISSUE_NUM in $ISSUE_NUMS; do
+            LABELS=$(gh issue view "$ISSUE_NUM" --repo ${{ github.repository }} --json labels --jq '.labels[].name')
+            echo "Issue #$ISSUE_NUM labels: $LABELS"
+            
+            if echo "$LABELS" | grep -q "needs-qa"; then
+              echo "Found needs-qa on issue #$ISSUE_NUM — adding to PR"
+              gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label "needs-qa"
+              exit 0
+            fi
+          done
+          
+          echo "No linked issues have needs-qa label"
