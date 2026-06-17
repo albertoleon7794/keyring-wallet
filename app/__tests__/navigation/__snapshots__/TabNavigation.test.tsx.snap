@@ -3,7 +3,6 @@
 exports[`Tab Navigation Integration QRCodeExchangeSlider renders correctly 1`] = `
 <Modal
   animationType="slide"
-  hardwareAccelerated={false}
   onRequestClose={[MockFunction]}
   transparent={true}
   visible={true}

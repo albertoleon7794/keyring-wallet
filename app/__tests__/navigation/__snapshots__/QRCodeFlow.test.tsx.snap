@@ -3,7 +3,6 @@
 exports[`QR Code Flow Integration QRCodeExchangeSlider renders correctly in AdvancedIdentity context 1`] = `
 <Modal
   animationType="slide"
-  hardwareAccelerated={false}
   onRequestClose={[MockFunction]}
   transparent={true}
   visible={true}
