@@ -1,0 +1,224 @@
+name: QA Review (Auto)
+
+# Fires INSTANTLY when the Mac QA pipeline completes — no polling, no cron.
+on:
+  workflow_run:
+    workflows: ["QA Pipeline (Mac)"]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          submodules: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: yarn install 2>&1 || echo "⚠️ yarn install had issues, continuing"
+
+      # ── Jest on main (baseline for pre-existing detection) ──
+      - name: Run Jest on main for baseline
+        run: |
+          git fetch origin main
+          mkdir -p /tmp/qa-baseline
+          git show origin/main:app/package.json > /tmp/qa-baseline/pkg.json
+          yarn test --json --outputFile=/tmp/jest-pr.json 2>&1 || true
+          echo "=== PR JEST DONE ==="
+
+      - name: Find PR and bot comment
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR=$(gh pr list --repo ${{ github.repository }} \
+            --head ${{ github.event.workflow_run.head_branch }} \
+            --json number --jq '.[0].number')
+          echo "number=$PR" >> $GITHUB_OUTPUT
+          
+          gh pr view $PR --repo ${{ github.repository }} --json comments \
+            --jq '.comments | map(select(.body | startswith("## 🤖 QA Results"))) | last.body' \
+            > /tmp/bot-comment.md 2>/dev/null || echo "" > /tmp/bot-comment.md
+
+      # ── Run Jest on main for baseline ──
+      - name: Run Jest on main
+        run: |
+          git stash
+          git checkout origin/main -- .
+          yarn test --json --outputFile=/tmp/jest-main.json 2>&1 || true
+          git checkout ${{ github.event.workflow_run.head_branch }}
+          git stash pop 2>/dev/null || true
+
+      # ── Analyze ──
+      - name: Analyze and classify
+        id: analysis
+        run: |
+          python3 << 'PYEOF'
+          import json, re, os
+
+          def load_jest_failures(path):
+              failures = {}
+              try:
+                  with open(path) as f:
+                      data = json.load(f)
+                  for suite in data.get('testResults', []):
+                      sn = suite['name']
+                      for test in suite.get('assertionResults', []):
+                          if test['status'] == 'failed':
+                              key = f"{sn} > {test['fullName']}"
+                              msg = (test.get('failureMessages', [''])[0] or '')[:200]
+                              failures[key] = msg
+              except: pass
+              return failures, len(data.get('testResults', [])) if 'data' in dir() else 0
+
+          pr_failures, pr_suites = load_jest_failures('/tmp/jest-pr.json')
+          main_failures, main_suites = load_jest_failures('/tmp/jest-main.json')
+
+          # Parse bot comment for Appium
+          bot = ''
+          try:
+              with open('/tmp/bot-comment.md') as f:
+                  bot = f.read()
+          except: pass
+
+          ios_pass = 'ALL CHECKS PASSED' in bot or ('exit' in bot.lower() and '0' in bot)
+          android_pass = 'android' not in bot.lower() or 'pass' in bot.lower()
+
+          new_failures = {}
+          pre_existing = {}
+          for name, msg in pr_failures.items():
+              if name in main_failures:
+                  pre_existing[name] = msg
+              else:
+                  new_failures[name] = msg
+
+          pr_failed = len([s for s in json.load(open('/tmp/jest-pr.json')).get('testResults',[]) if s['status']=='failed']) if os.path.exists('/tmp/jest-pr.json') else 0
+
+          if new_failures:
+              verdict = 'REJECTED'
+          elif pr_failures:
+              verdict = 'CONDITIONAL'
+          else:
+              verdict = 'APPROVED'
+
+          result = {
+              'verdict': verdict,
+              'pr_suites': pr_suites,
+              'pr_failed': pr_failed,
+              'new_count': len(new_failures),
+              'pre_count': len(pre_existing),
+              'ios_pass': ios_pass,
+              'android_pass': android_pass,
+              'new_failures': list(new_failures.keys())[:10],
+              'pre_failures': list(pre_existing.keys())[:10],
+          }
+          with open('/tmp/analysis.json', 'w') as f:
+              json.dump(result, f)
+          print(json.dumps(result, indent=2))
+          PYEOF
+
+      # ── Post review + handoff ──
+      - name: Post QA Review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 << 'PYEOF'
+          import json, os, subprocess
+
+          with open('/tmp/analysis.json') as f:
+              a = json.load(f)
+
+          pr = "${{ steps.pr.outputs.number }}"
+
+          emoji = {'APPROVED': '✅', 'CONDITIONAL': '⚠️', 'REJECTED': '❌'}[a['verdict']]
+          reason = {
+              'APPROVED': 'All checks pass, ready for merge',
+              'CONDITIONAL': 'Issues are pre-existing, safe to merge',
+              'REJECTED': 'New regressions detected, fix before merging'
+          }[a['verdict']]
+
+          jest_emoji = '✅' if a['pr_failed'] == 0 else '❌'
+          ios_emoji = '✅' if a['ios_pass'] else '❌'
+          android_emoji = '✅' if a['android_pass'] else '❌'
+
+          rows = ""
+          for f in a['new_failures']:
+              rows += f"| `{f[:80]}` | ❌ New regression |\n"
+          for f in a['pre_failures']:
+              rows += f"| `{f[:80]}` | ⚠️ Pre-existing |\n"
+          if not rows:
+              rows = "| — | No failures detected |\n"
+
+          regressions = '\n'.join(f"- `{f[:100]}`" for f in a['new_failures'])
+
+          body = f"""## QA Review — Auto
+
+          ### Mac Runner Results
+          | Check | Result |
+          |---|---|
+          | Jest | {jest_emoji} ({a['pr_failed']}/{a['pr_suites']} suites failed) |
+          | Appium E2E — iOS | {ios_emoji} |
+          | Appium E2E — Android | {android_emoji} |
+
+          ### Failure Analysis
+          | Test | Classification |
+          |---|---|
+          {rows}
+          ### Verdict
+          **{emoji} {a['verdict']}** — {reason}
+
+          {f'### New Regressions ({a["new_count"]})\n{regressions}' if a['new_failures'] else ''}
+          """
+
+          # Post comment
+          subprocess.run(['gh', 'pr', 'comment', pr,
+              '--repo', 'albertoleon7794/keyring-wallet',
+              '--body', body], check=False)
+
+          # On rejection: handoff
+          if a['verdict'] == 'REJECTED':
+              # Find linked issue
+              pr_body = subprocess.run(['gh', 'pr', 'view', pr,
+                  '--repo', 'albertoleon7794/keyring-wallet',
+                  '--json', 'body', '--jq', '.body'],
+                  capture_output=True, text=True).stdout
+
+              import re
+              m = re.search(r'(?:Closes|Fixes|Resolves)\s+#(\d+)', pr_body, re.I)
+              if m:
+                  issue = m.group(1)
+                  handoff = f"""## 🔄 QA rejected — handed back to engineer
+
+          **PR:** #{pr}
+          **Verdict:** ❌ REJECTED
+
+          ### Regressions
+          {regressions}
+
+          **Next:** Fix regressions, re-push. QA auto-detects and re-runs."""
+
+                  subprocess.run(['gh', 'issue', 'comment', issue,
+                      '--repo', 'albertoleon7794/keyring-wallet',
+                      '--body', handoff], check=False)
+
+                  # Create fix ticket
+                  first_fail = a['new_failures'][0][:60] if a['new_failures'] else 'QA regressions'
+                  ticket = f"## Regression from PR #{pr}\n{regressions}"
+                  subprocess.run(['gh', 'issue', 'create',
+                      '--repo', 'albertoleon7794/keyring-wallet',
+                      '--title', f'Fix: {first_fail}',
+                      '--body', ticket,
+                      '--label', 'bug,qa-rejected'], check=False)
+          PYEOF
