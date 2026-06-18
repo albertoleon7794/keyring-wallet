@@ -86,28 +86,9 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           nvm use 20.19.2
-
-          # CocoaPods isn't on the default non-interactive shell PATH on the
-          # self-hosted Mac runner. Add the common install locations
-          # (Homebrew on Apple Silicon, Homebrew on Intel, system gem bin)
-          # so `pod` resolves regardless of how it was installed.
-          export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.gem/ruby/2.6.0/bin:$HOME/.rbenv/shims:$PATH"
-          # Source user profile so any custom rbenv/asdf/Homebrew shellenv is loaded too.
-          [ -f "$HOME/.zprofile" ] && source "$HOME/.zprofile" 2>/dev/null || true
-          [ -f "$HOME/.bash_profile" ] && source "$HOME/.bash_profile" 2>/dev/null || true
-
-          if ! command -v pod >/dev/null 2>&1; then
-            echo "::error::pod still not on PATH after extending it. Searched: /opt/homebrew/bin, /usr/local/bin, ~/.gem/ruby/2.6.0/bin, ~/.rbenv/shims"
-            echo "PATH=$PATH"
-            echo "Trying to locate pod with 'find'..."
-            find /opt/homebrew /usr/local /Library/Ruby ~/.gem ~/.rbenv -name pod -type f 2>/dev/null | head -5 || true
-            exit 1
-          fi
-          echo "Using pod at: $(command -v pod)"
-          pod --version
-
+          
           cd app/ios
-
+          
           # Pod install first
           pod install 2>&1 | tail -5
           
@@ -199,12 +180,6 @@ jobs:
           echo "JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo '')" >> $GITHUB_ENV
           echo "ANDROID_HOME=$ANDROID_HOME"
 
-      # RN 0.81+ requires CMake ≥3.30 — default SDK ships 3.22.1 which is incompatible with NDK 27.x
-      - name: Install CMake 3.31+ (required for NDK 27.x)
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "cmake;3.31.6"
-          echo "CMake installed: $($ANDROID_HOME/cmake/3.31.6/bin/cmake --version | head -1)"
-
       - name: Build Android app (assembleDebug)
         id: android-build
         run: |
@@ -282,7 +257,7 @@ jobs:
             
             const body = `## 🤖 QA Results\n\n### Jest\n\`\`\`\n${jestLog || 'No results'}\n\`\`\`\n\n### Appium E2E — iOS\n\`\`\`\n${appiumIosLog || 'No results'}\n\`\`\`\n\n### Appium E2E — Android\n\`\`\`\n${appiumAndroidLog || 'No results'}\n\`\`\`${buildSection}`;
             
-            const prNumber = ${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.pr_number }};
+            const prNumber = ${{ github.event.pull_request.number || inputs.pr_number }};
             
             await github.rest.issues.createComment({
               owner: context.repo.owner,
