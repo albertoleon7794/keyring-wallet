@@ -199,6 +199,12 @@ jobs:
           echo "JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo '')" >> $GITHUB_ENV
           echo "ANDROID_HOME=$ANDROID_HOME"
 
+      # RN 0.81+ requires CMake ≥3.30 — default SDK ships 3.22.1 which is incompatible with NDK 27.x
+      - name: Install CMake 3.31+ (required for NDK 27.x)
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "cmake;3.31.6"
+          echo "CMake installed: $($ANDROID_HOME/cmake/3.31.6/bin/cmake --version | head -1)"
+
       - name: Build Android app (assembleDebug)
         id: android-build
         run: |
