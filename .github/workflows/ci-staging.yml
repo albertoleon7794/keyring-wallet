@@ -1,0 +1,28 @@
+name: CI — Development → Staging
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+jobs:
+  check:
+    name: Jest + TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: TypeScript check
+        run: yarn typecheck
+
+      - name: Jest unit tests
+        run: yarn test --passWithNoTests

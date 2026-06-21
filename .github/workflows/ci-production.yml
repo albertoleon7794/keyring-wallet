@@ -1,0 +1,50 @@
+name: CI — Staging → Main (Full Gate)
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  unit:
+    name: Jest + TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: TypeScript check
+        run: yarn typecheck
+
+      - name: Jest unit tests
+        run: yarn test --passWithNoTests
+
+  appium:
+    name: Appium E2E (real device)
+    needs: unit
+    runs-on: self-hosted
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-appium') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Run Appium E2E
+        run: yarn appium:e2e
+        env:
+          DEVICE_UDID: 00008140-00064C4621B8801C
