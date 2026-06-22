@@ -1,0 +1,30 @@
+name: CI — Development → Staging
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+jobs:
+  check:
+    name: Jest + TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Enable Corepack (yarn 4)
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: TypeScript check
+        run: yarn typecheck
+
+      - name: Jest unit tests
+        run: yarn test --passWithNoTests
