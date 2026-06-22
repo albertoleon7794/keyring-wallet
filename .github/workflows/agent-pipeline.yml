@@ -89,6 +89,10 @@ jobs:
           
           cd app/ios
           
+          # Ensure CocoaPods is on PATH (self-hosted runner shells drop Homebrew paths)
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          command -v pod >/dev/null || { echo "CocoaPods executable not found on PATH"; exit 1; }
+          
           # Pod install first
           pod install 2>&1 | tail -5
           
